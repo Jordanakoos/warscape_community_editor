@@ -75,7 +75,7 @@ fn complete_input_keys_reject_aliases_directory_conflicts_and_decoded_duplicates
 fn blm_files()->MapFiles {
     use wce_tile::battle_map::locations::{BattleLocations,Location};
     let native=BattleLocations{version:7,width:16,height:16,types:vec![("land_normal".into(),vec![Location{rect:[3,4,5,6],centre:[4,5],id:-1,extra:[0,0]}])],tail:b"opaque diagnostic tail\0\xff".to_vec()};
-    MapFiles::from_bytes([("locations.blm".into(),native.write()),("locations.blm.mask1".into(),vec![0xa5,0x5a]),("opaque.bin".into(),vec![1,255,0,7])])
+    MapFiles::from_bytes([("locations.blm".into(),native.write().expect("checked native fixture")),("locations.blm.mask1".into(),vec![0xa5,0x5a]),("opaque.bin".into(),vec![1,255,0,7])])
 }
 fn widen(d:&mut MapDocument) {
     let p=d.project().unwrap();let e=p.entities.iter().find(|e|matches!(p.kind(e),wce_terrain::terry::EntityKind::CatchmentRegion)).unwrap();
