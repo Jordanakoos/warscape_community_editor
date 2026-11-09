@@ -152,7 +152,7 @@ impl PlacementsPanel {
         after.validate_placement_edit(&before)?;
         rebound(&mut after, &db);
         let watch = d.cells.clone();
-        d.push_tile_list(TileListCommand { name: name.to_owned(), before, after, watch });
+        d.push_tile_list(TileListCommand { name: name.to_owned(), before, after, watch })?;
         Ok(said)
     }
 

@@ -100,7 +100,7 @@ fn document_save_refuses_an_independently_recorded_inconsistent_list_without_wri
     let before = PlacementsPanel::list(&d).unwrap().clone();
     let mut after = before.clone();
     after.placements.remove(1);
-    d.push_tile_list(TileListCommand { name: "bypassed removal".to_owned(), before, after, watch: d.cells.clone() });
+    d.push_tile_list(TileListCommand { name: "bypassed removal".to_owned(), before, after, watch: d.cells.clone() }).unwrap();
     let state_before_save = state(&d);
     assert!(d.history().modified());
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -122,7 +122,7 @@ fn review_document_nan_no_op_saves_exactly_and_rejected_edit_keeps_saved_history
     let model = wce_terrain_io::built::read("test", &files).unwrap();
     let mut d = MapDocument::new("test".to_owned(), MapSource::Packs("test".to_owned()), Some(model), Arc::new(PlacedMap::default()), None, Arc::new(TileDatabase::default()));
     d.history_mut().mark_saved();
-    d.push_tile_list(TileListCommand { name: "unchanged NaN".to_owned(), before: list.clone(), after: list, watch: d.cells.clone() });
+    d.push_tile_list(TileListCommand { name: "unchanged NaN".to_owned(), before: list.clone(), after: list, watch: d.cells.clone() }).unwrap();
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let path = std::env::temp_dir().join(format!("wce-nan-save-{}-{stamp}", std::process::id()));
     std::fs::create_dir(&path).unwrap();
@@ -150,7 +150,7 @@ fn review_missing_original_v9_save_failure_preserves_document_and_history() {
     let mut after = list.clone();
     after.version = 8;
     after.placements.pop();
-    d.push_tile_list(TileListCommand { name: "bypassed downgrade".to_owned(), before: list, after, watch: d.cells.clone() });
+    d.push_tile_list(TileListCommand { name: "bypassed downgrade".to_owned(), before: list, after, watch: d.cells.clone() }).unwrap();
     std::fs::remove_file(&source).unwrap();
     let before = state(&d);
     let output = path.join("output");
