@@ -6,6 +6,7 @@
 use wce_scene::render_scene::{DocumentId, LayerId, RenderScene};
 
 use crate::document::{Document, SaveTarget};
+use crate::selection::{Selection, SelectionOp};
 
 struct Entry {
     doc: Box<dyn Document>,
@@ -51,6 +52,11 @@ impl DocumentManager {
         {
             return Err(format!("{} is open already: close it first ({tool_id} has one document at a time)", old.title()));
         }
+
+        // Replacing this tool's active stand-in changes the global history target too.
+        // Background publication does not resolve an unrelated document's gesture.
+        if self.active_tool == tool_id && !doc.stand_in()
+            && let Some(old) = self.active_mut() { old.prepare_deactivate()?; }
 
         let layer = scene.add_layer(doc.id(), &doc.title());
         doc.publish(scene, layer);
@@ -110,9 +116,39 @@ impl DocumentManager {
 
     /// The active tool changed (the editor calls it): its document is the active one from now on.
     pub fn set_active_tool(&mut self, tool_id: &str) {
+        if let Err(err) = self.try_set_active_tool(tool_id) { wce_foundation::log::error(err); }
+    }
+
+    /// Resolve the current document before changing the tool-owned history target.
+    pub fn try_set_active_tool(&mut self, tool_id: &str) -> Result<(), String> {
         if self.active_tool != tool_id {
+            if let Some(old) = self.active_mut() { old.prepare_deactivate()?; }
             tool_id.clone_into(&mut self.active_tool);
         }
+        Ok(())
+    }
+
+    /// Activate a document through its owning tool; a real document takes precedence over its stand-in.
+    pub fn try_set_active(&mut self, id: DocumentId) -> Result<(), String> {
+        let tool = self.activation_tool(id)?;
+        self.try_set_active_tool(&tool)
+    }
+
+    /// Validate the exact target before the editor schedules its owning tool's layout.
+    pub fn activation_tool(&self, id: DocumentId) -> Result<String, String> {
+        let e = self.entry(id).ok_or_else(|| format!("No such document: {id}"))?;
+        let target = self.of_tool(&e.tool).or_else(|| self.entries.iter().find(|x| x.tool == e.tool && x.doc.stand_in()).map(|x| x.doc.id()));
+        if target != Some(id) {
+            return Err("This document is not the tool's current history target".into());
+        }
+        Ok(e.tool.clone())
+    }
+
+    /// Approve activation before changing selection, its revision or the inspector target.
+    pub fn try_select(&mut self, selection: &mut Selection, r: wce_scene::render_scene::SourceRef, op: SelectionOp) -> Result<(), String> {
+        self.try_set_active(r.doc)?;
+        match op { SelectionOp::Set => selection.set(r), SelectionOp::Add => selection.add(r), SelectionOp::Toggle => selection.toggle(r) }
+        Ok(())
     }
 
     pub fn active_tool(&self) -> &str {

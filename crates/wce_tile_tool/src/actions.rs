@@ -383,8 +383,10 @@ impl TileTool {
     /// the menu opens.
     pub(crate) fn context_click(&mut self, e: &mut Editor, hit: SourceRef) {
         let Some(id) = document_id(e) else { return };
-        if hit.doc == id && elem_of(hit.item).is_some() && !e.selection.contains(hit) {
-            e.selection.set(hit);
+        if hit.doc == id && elem_of(hit.item).is_some() {
+            let result = if e.selection.contains(hit) { e.try_activate_document(id) }
+                else { e.select_source(hit, wce_editor_core::selection::SelectionOp::Set) };
+            if let Err(err) = result { e.status(&err, true); return }
         }
 
         self.context_menu = true;

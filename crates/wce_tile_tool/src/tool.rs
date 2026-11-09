@@ -730,21 +730,21 @@ pub fn primary(e: &Editor) -> Option<usize> {
 }
 
 pub fn select_elem(e: &mut Editor, elem: Option<usize>, add: bool) {
-    let Some(id) = document_id(e) else { return };
+    if let Err(err) = try_select_elem(e, elem, add) { e.status(&err, true); }
+}
+
+pub(crate) fn try_select_elem(e: &mut Editor, elem: Option<usize>, add: bool) -> Result<(), String> {
+    let id = document_id(e).ok_or("no tile document")?;
     let Some(elem) = elem else {
         if !add {
             e.selection.clear();
         }
 
-        return;
+        return Ok(());
     };
 
     let r = SourceRef { doc: id, item: wce_tile_editor::tile_document::item_of(elem) };
-    if add {
-        e.selection.add(r);
-    } else {
-        e.selection.set(r);
-    }
+    e.select_source(r, if add { wce_editor_core::selection::SelectionOp::Add } else { wce_editor_core::selection::SelectionOp::Set })
 }
 
 fn tile_dir_of(path: &str) -> PathBuf {
@@ -1771,6 +1771,7 @@ impl TileTool {
 
     /// Copies the selection into the tool's clipboard; `cut` deletes it after (one undo entry, as Delete).
     pub(crate) fn copy_selection(&mut self, e: &mut Editor, cut: bool) {
+        if cut { if let Some(id) = document_id(e) { if let Err(err) = e.try_activate_document(id) { e.status(&err, true); return } } }
         let all = selected(e);
         let Some(d) = document(e) else { return };
         let items = d.copy_items(&all);
@@ -1796,6 +1797,8 @@ impl TileTool {
             self.status = "nothing to paste".to_owned();
             return false;
         };
+
+        if let Some(id) = document_id(e) { if let Err(err) = e.try_activate_document(id) { e.status(&err, true); return false } }
 
         let offset = if at_mouse && self.terrain_hit { self.snapped_cursor - first } else { Float3::default() };
         let Some(d) = document(e) else { return false };
@@ -4111,14 +4114,9 @@ impl Tool for TileTool {
                 };
 
                 let r = d.ref_of(hit);
-                if ev.ctrl {
-                    e.selection.toggle(r);
-                } else if ev.shift {
-                    e.selection.add(r);
-                } else {
-                    e.selection.set(r);
-                }
-
+                use wce_editor_core::selection::SelectionOp;
+                let op = if ev.ctrl { SelectionOp::Toggle } else if ev.shift { SelectionOp::Add } else { SelectionOp::Set };
+                if let Err(err) = e.select_source(r, op) { e.status(&err, true); return true; }
                 self.poly_point = None;
                 true
             }

@@ -1069,6 +1069,34 @@ pub fn register(c: &mut CommandRegistry<Editor>) {
         }
     });
 
+    c.add("tile_test_pick", "tile_test_pick <element> [ctrl|shift]", "test: use the actual tile viewport Click path with a known source", |e, a| {
+        with_tile(e, |t, e| {
+            let Some(id) = crate::tool::document_id(e) else { return no_tile() };
+            let Some(el) = a.first().and_then(|s| s.parse::<usize>().ok()) else { return fail("expected element") };
+            let Some(d) = e.docs.find_as::<wce_tile_editor::tile_document::TileDocument>(id) else { return no_tile() };
+            if el >= d.tile().tscene().doc().elements().len() { return fail("no such element") }
+            let event = wce_editor::tool::ViewportEvent { kind: wce_editor::tool::ViewportEventKind::Click, hit_source: d.ref_of(el), ctrl: a.get(1).is_some_and(|s| s == "ctrl"), shift: a.get(1).is_some_and(|s| s == "shift"), ..Default::default() };
+            wce_editor::tool::Tool::viewport_input(t, e, &event);
+            if e.docs.active_id() == id { ok("") } else { fail("tile selection activation was refused") }
+        })
+    });
+    c.add("tile_test_tree", "tile_test_tree set|toggle|add|range <first> [last]", "test: use the scene tree's checked selection commit", |e, a| {
+        with_tile(e, |t, e| {
+            let Some(id) = crate::tool::document_id(e) else { return no_tile() };
+            let Some(first) = a.get(1).and_then(|s| s.parse::<usize>().ok()) else { return fail("expected element") };
+            let last = a.get(2).and_then(|s| s.parse::<usize>().ok()).unwrap_or(first);
+            let d = e.docs.find_as::<wce_tile_editor::tile_document::TileDocument>(id).expect("tile");
+            if first.max(last) >= d.tile().tscene().doc().elements().len() { return fail("no such element") }
+            let mut candidate = e.selection.clone();
+            match a.first().map(String::as_str) {
+                Some("set") => candidate.set(d.ref_of(first)), Some("toggle") => candidate.toggle(d.ref_of(first)),
+                Some("add") => candidate.add(d.ref_of(first)), Some("range") => { for el in first.min(last)..=first.max(last) { candidate.add(d.ref_of(el)); } }
+                _ => return fail("expected set/toggle/add/range"),
+            }
+            crate::scene_panel::commit_tree_selection(t, e, id, candidate, Some(first)).map_or_else(fail, |_| ok(""))
+        })
+    });
+
     c.add("tile_select", "tile_select <type | element index> [add]", "select the first instance of a type, or an element by index", |e, a| {
         let Some(d) = document(e) else { return no_tile() };
         let Some(what) = a.first() else { return fail("usage: tile_select <type | element index> [add]") };
@@ -1079,7 +1107,7 @@ pub fn register(c: &mut CommandRegistry<Editor>) {
         };
 
         let Some(found) = found.filter(|&f| f < d.tile().tscene().doc().elements().len()) else { return fail(format!("nothing found for '{what}'")) };
-        select_elem(e, Some(found), add);
+        if let Err(err) = crate::tool::try_select_elem(e, Some(found), add) { return fail(err) }
         ok(format!("element {found}"))
     });
 
@@ -1094,6 +1122,7 @@ pub fn register(c: &mut CommandRegistry<Editor>) {
             let sc = d.tile().tscene();
             let key = |el: usize| sc.doc().find_attr(el, "key").map(|at| String::from_utf8_lossy(sc.doc().attr_raw(el, at)).to_lowercase()).unwrap_or_default();
             let found = d.tile().instances().iter().copied().filter(|&el| sc.type_of(el) == ty && words.iter().all(|w| key(el).contains(w))).collect::<Vec<_>>();
+            if let Err(err) = e.try_activate_document(id) { return fail(err) }
             e.selection.clear();
             for &el in &found {
                 e.selection.add(wce_scene::render_scene::SourceRef { doc: id, item: wce_tile_editor::tile_document::item_of(el) });
@@ -1226,6 +1255,7 @@ pub fn register(c: &mut CommandRegistry<Editor>) {
             let el = primary(e);
             let Some(key) = a.first().cloned() else { return fail("usage: add_building <key> [x m z m]") };
             with_tile(e, |t, e| {
+                if let Some(id) = crate::tool::document_id(e) { if let Err(err) = e.try_activate_document(id) { return fail(err) } }
                 let Some(d) = document(e) else { return no_tile() };
                 let at = (a.len() >= 3).then(|| Some((number(&a[1])?, number(&a[2])?))).flatten().map(|(x, z)| Float3::new(x, d.tile().terrain_height(x, z), z));
                 let into = t.new_items_layer(d);
@@ -2339,7 +2369,7 @@ pub fn register(c: &mut CommandRegistry<Editor>) {
         let Some(d) = document(e) else { return fail("usage: tile_select_layer <layer path | #elem>") };
         let el = element_arg(d, what, p);
         let Some(el) = el else { return fail("no such layer or element") };
-        select_elem(e, Some(el), false);
+        if let Err(err) = crate::tool::try_select_elem(e, Some(el), false) { return fail(err) }
         ok("")
     });
 
@@ -2374,7 +2404,7 @@ pub fn register(c: &mut CommandRegistry<Editor>) {
                 }
 
                 _ => {
-                    select_elem(e, Some(found), false);
+                    if let Err(err) = crate::tool::try_select_elem(e, Some(found), false) { return fail(err) }
                     ok(format!("element {found}"))
                 }
             }

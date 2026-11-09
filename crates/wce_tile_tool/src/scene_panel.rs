@@ -628,6 +628,16 @@ enum RowAction {
     ToggleOpen(String, bool),
 }
 
+pub(crate) fn commit_tree_selection(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::DocumentId, selection: wce_editor_core::selection::Selection, anchor: Option<usize>) -> Result<(), String> {
+    e.try_activate_document(id)?;
+    e.selection = selection;
+    tool.leave_for_selection(e);
+    tool.anchor = anchor;
+    tool.tree_picked = true;
+    tool.tree_synced = selected(e).first().copied();
+    Ok(())
+}
+
 fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::DocumentId) {
     let row_h = gui::text_line_height_with_spacing() + 2.0;
     let dl = gui::window_draw_list();
@@ -637,6 +647,9 @@ fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::D
     let mut actions = vec![];
     let mut pending_drop: Option<(Vec<usize>, usize, Option<usize>)> = None;
     let mut activate = false;
+    // Prepare row/range selection locally; commit only after the document accepts activation.
+    let mut next_selection = e.selection.clone();
+    let mut next_anchor = tool.anchor;
     if let Some(target) = tool.tree_scroll_to.take()
         && let Some(i) = tool.tree_rows.iter().position(|r| r.elem == target)
     {
@@ -669,7 +682,7 @@ fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::D
         let t = d.tile();
         let sc = t.tscene();
         let rows = tool.tree_rows.clone();
-        let selection = &mut e.selection;
+        let selection = &mut next_selection;
         let tool_ref = &mut *tool;
         gui::clipped_rows(rows.len(), row_h, |i| {
             let row = &rows[i];
@@ -692,19 +705,18 @@ fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::D
                 let io = gui::io();
                 if io.KeyCtrl {
                     selection.toggle(r);
-                } else if io.KeyShift && !selection.is_empty() && tool_ref.anchor.is_some() {
-                    if let Some(a) = rows.iter().position(|x| Some(x.elem) == tool_ref.anchor) {
+                } else if io.KeyShift && !selection.is_empty() && next_anchor.is_some() {
+                    if let Some(a) = rows.iter().position(|x| Some(x.elem) == next_anchor) {
                         for x in &rows[a.min(i)..=a.max(i)] {
                             selection.add(d.ref_of(x.elem));
                         }
                     }
                 } else {
                     selection.set(r);
-                    tool_ref.anchor = Some(el);
+                    next_anchor = Some(el);
                 }
 
                 activate = true;
-                tool_ref.tree_picked = true;
                 if gui::is_mouse_double_clicked(0) && !is_graph {
                     actions.push(RowAction::Rename(el));
                 }
@@ -712,7 +724,8 @@ fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::D
 
             if gui::is_item_clicked_with(1) && !is_sel {
                 selection.set(r);
-                tool_ref.anchor = Some(el);
+                next_anchor = Some(el);
+                activate = true;
             }
 
             // Drag source: the row, or the whole selection when the row is part of it.
@@ -1033,8 +1046,7 @@ fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::D
 
     // A click on a row: the tree does not scroll to what it selected itself.
     if activate {
-        tool.leave_for_selection(e);
-        tool.tree_synced = selected(e).first().copied();
+        if let Err(err) = commit_tree_selection(tool, e, id, next_selection, next_anchor) { e.status(&err, true); return }
     }
 
     // Keys while the pointer is over the tree.
@@ -1047,6 +1059,9 @@ fn draw_tree(tool: &mut TileTool, e: &mut Editor, id: wce_scene::render_scene::D
     }
 
     let mut prefab_actions = vec![];
+    if !actions.is_empty() || pending_drop.is_some() {
+        if let Err(err) = e.try_activate_document(id) { e.status(&err, true); return }
+    }
     for action in actions {
         let d = e.docs.find_as_mut::<TileDocument>(id).expect("a tile");
         match action {

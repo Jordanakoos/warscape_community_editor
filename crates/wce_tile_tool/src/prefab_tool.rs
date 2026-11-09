@@ -134,6 +134,7 @@ impl PrefabTool {
     ///
     /// The one there has unsaved changes (a script gave no answer), no such prefab, or the stage can't be made.
     pub fn open_prefab(&mut self, e: &mut Editor, key: &str) -> Result<String, String> {
+        if let Some(d) = e.docs.active_mut() { d.prepare_deactivate()?; }
         let again = key.to_owned();
         let retry = Box::new(move |e: &mut Editor| e.with_tool::<Self, _>(|p, e| p.open_prefab(e, &again)).unwrap_or_else(|| Err("the Prefab tool is busy".to_owned())));
         if !e.clear_to_replace(PREFAB_TOOL_ID, retry)? {
@@ -398,6 +399,9 @@ impl PrefabTool {
 
     /// The stage shows, the tiles don't (they would be where it is).
     fn show_stage(&mut self, e: &mut Editor) {
+        if let Some(open) = &self.open {
+            if let Err(err) = e.try_activate_document(open.doc) { e.status(&err, true); return; }
+        }
         for id in e.docs.order().to_vec() {
             let tool = e.docs.tool_of(id);
             if tool == TILE_TOOL_ID && e.docs.visible(&e.scene, id) {
@@ -1039,6 +1043,9 @@ impl Tool for PrefabTool {
 impl TileTool {
     /// The Tile tool activated: the tiles the Prefab tool hid show again, its stage does not.
     pub(crate) fn show_tiles(e: &mut Editor) {
+        if let Some(id) = e.docs.order().iter().copied().find(|&id| e.docs.tool_of(id) == TILE_TOOL_ID) {
+            if let Err(err) = e.try_activate_document(id) { e.status(&err, true); return; }
+        }
         let hidden = e.with_tool::<PrefabTool, _>(|p, _| std::mem::take(&mut p.hidden)).unwrap_or_default();
         for id in e.docs.order().to_vec() {
             if e.docs.tool_of(id) == PREFAB_TOOL_ID {

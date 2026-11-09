@@ -940,12 +940,10 @@ pub fn draw(e: &mut Editor, textures: &mut D3D11Renderer) {
                     if !ev.ctrl {
                         e.selection.clear();
                     }
-                } else if ev.ctrl {
-                    e.selection.toggle(ev.hit_source);
-                } else if ev.shift {
-                    e.selection.add(ev.hit_source);
                 } else {
-                    e.selection.set(ev.hit_source);
+                    use wce_editor_core::selection::SelectionOp;
+                    let op = if ev.ctrl { SelectionOp::Toggle } else if ev.shift { SelectionOp::Add } else { SelectionOp::Set };
+                    if let Err(err) = e.select_source(ev.hit_source, op) { e.status(&err, true); }
                 }
             }
         }

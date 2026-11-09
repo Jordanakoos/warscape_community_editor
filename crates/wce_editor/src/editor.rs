@@ -1036,16 +1036,35 @@ impl Editor {
 
     /// Takes effect in the next `pre_frame`. False for a tool not in this build or not supported by the current game.
     pub fn set_tool(&mut self, id: &str) -> bool {
+        match self.try_set_tool(id) {
+            Ok(()) => true,
+            Err(err) => { self.status(&err, true); false }
+        }
+    }
+
+    /// The active document and the pending tool layout change together, after gesture resolution.
+    pub fn try_set_tool(&mut self, id: &str) -> Result<(), String> {
         match self.tool_info.iter().position(|t| t.id == id) {
             Some(i) if self.tool_supported(i) => {
+                self.docs.try_set_active_tool(id)?;
                 // The active document is the tool's from now on (the layout switches on the next frame).
                 self.pending_tool = Some(i);
-                self.docs.set_active_tool(id);
-                true
+                Ok(())
             }
 
-            _ => false,
+            _ => Err(format!("Tool '{id}' is unavailable for this game")),
         }
+    }
+
+    pub fn try_activate_document(&mut self, id: DocumentId) -> Result<(), String> {
+        let tool = self.docs.activation_tool(id)?;
+        self.try_set_tool(&tool)
+    }
+
+    /// The inspector target changes only after its document accepts activation.
+    pub fn select_source(&mut self, r: wce_scene::render_scene::SourceRef, op: wce_editor_core::selection::SelectionOp) -> Result<(), String> {
+        self.try_activate_document(r.doc)?;
+        self.docs.try_select(&mut self.selection, r, op)
     }
 
     /// Starts in the tool the last interactive session was in, and keeps the active tool in the settings from now on (interactive runs; a
@@ -1066,6 +1085,10 @@ impl Editor {
 
         match self.pending_tool.take() {
             Some(i) if i != self.active_tool && i < self.tools.len() && self.tool_supported(i) => {
+                if let Err(err) = self.docs.try_set_active_tool(&self.tool_info[i].id) {
+                    self.status(&err, true);
+                    return;
+                }
                 // A layout not loaded yet (the first frame) is not the tool's: the file keeps the saved one.
                 if self.layout_loaded {
                     self.save_layout();
@@ -1230,11 +1253,15 @@ impl Editor {
         if let Some(id) = open {
             let owner = self.docs.tool_of(id);
             if switch_tool && owner != self.active_tool_id() {
-                self.set_tool(&owner);
+                self.try_set_tool(&owner)?;
             }
 
             return Ok(format!("already open: {path}"));
         }
+
+        // A requested activation must leave the old document recoverable if it refuses.
+        if switch_tool && tid != self.docs.active_tool()
+            && let Some(d) = self.docs.active_mut() { d.prepare_deactivate()?; }
 
         // The tool's document gives way to the new one (asked about first when it has unsaved changes).
         let old = self.docs.of_tool(&tid);
@@ -1253,7 +1280,7 @@ impl Editor {
         let doc = opened.unwrap_or_else(|| Err(format!("{title} is busy"))).map_err(|e| format!("cannot open {path}: {e}"))?;
         self.replace_document(&tid, doc)?;
         if switch_tool && tool != self.active_tool {
-            self.set_tool(&tid);
+            self.try_set_tool(&tid)?;
         }
 
         Ok(format!("opened {path}"))
@@ -1268,6 +1295,7 @@ impl Editor {
         if !doc.stand_in()
             && let Some(old) = self.docs.of_tool(tool)
         {
+            if let Some(d) = self.docs.find_mut(old) { d.prepare_deactivate()?; }
             self.close_document(old);
         }
 

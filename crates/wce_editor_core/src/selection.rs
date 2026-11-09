@@ -3,6 +3,10 @@
 
 use wce_scene::render_scene::{DocumentId, EntityId, RenderScene, SourceRef};
 
+/// The existing single-target selection operations, gated by document activation at UI boundaries.
+#[derive(Clone, Copy, Debug)]
+pub enum SelectionOp { Set, Add, Toggle }
+
 #[derive(Clone, Debug, Default)]
 pub struct Selection {
     items: Vec<SourceRef>,

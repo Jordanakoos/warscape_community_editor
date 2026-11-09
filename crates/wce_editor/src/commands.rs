@@ -258,13 +258,7 @@ pub fn register_builtin(c: &mut CommandRegistry<Editor>) {
 
     c.add("tool", "tool <id>", "switch the active tool (weather, tile, ...)", |e, a| {
         let Some(id) = a.first() else { return fail("usage: tool <id>") };
-        if e.set_tool(id) {
-            ok("")
-        } else if e.tool_ids().iter().any(|t| t == id) {
-            fail(format!("the tool '{id}' is not available for {}", e.game().display_name))
-        } else {
-            fail(format!("no tool '{id}'"))
-        }
+        e.try_set_tool(id).map_or_else(fail, |_| ok(""))
     });
 
     c.add("assert_tool", "assert_tool <id>", "test: the active tool is <id> (after a frame)", |e, a| {
@@ -904,11 +898,8 @@ pub fn register_builtin(c: &mut CommandRegistry<Editor>) {
         let ctrl = a.get(2).is_some_and(|x| x == "ctrl");
         match source {
             Some(s) if s.doc != 0 => {
-                if ctrl {
-                    e.selection.toggle(s);
-                } else {
-                    e.selection.set(s);
-                }
+                let op = if ctrl { wce_editor_core::selection::SelectionOp::Toggle } else { wce_editor_core::selection::SelectionOp::Set };
+                if let Err(err) = e.select_source(s, op) { return fail(err) }
             }
 
             _ => {
@@ -919,6 +910,25 @@ pub fn register_builtin(c: &mut CommandRegistry<Editor>) {
         }
 
         ok("")
+    });
+
+    c.add("test_select_source", "test_select_source set|add|toggle <doc> <item>", "test: the checked selection path used by viewport and tile picks", |e, a| {
+        use wce_editor_core::selection::SelectionOp;
+        let op = match a.first().map(String::as_str) { Some("set") => SelectionOp::Set, Some("add") => SelectionOp::Add, Some("toggle") => SelectionOp::Toggle, _ => return fail("expected set/add/toggle") };
+        let Some(doc) = a.get(1).and_then(|s| s.parse().ok()) else { return fail("expected document id") };
+        let Some(item) = a.get(2).and_then(|s| s.parse().ok()) else { return fail("expected item") };
+        e.select_source(SourceRef { doc, item }, op).map_or_else(fail, |_| ok(""))
+    });
+    c.add("assert_selection", "assert_selection <doc> <item> ...", "test: selection and primary inspector target match these ordered document/item pairs", |e, a| {
+        let parsed = a.iter().map(|s| s.parse::<u64>()).collect::<Result<Vec<_>, _>>();
+        let Ok(parsed) = parsed else { return fail("expected document/item pairs") };
+        if parsed.len() % 2 != 0 { return fail("expected document/item pairs") }
+        let wanted: Vec<_> = parsed.chunks_exact(2).map(|v| SourceRef { doc: v[0] as u32, item: v[1] }).collect();
+        if e.selection.items() == wanted { ok("") } else { fail(format!("selection is {:?}", e.selection.items())) }
+    });
+    c.add("assert_active_document", "assert_active_document <doc>", "test: global history and tool document target have this active id", |e, a| {
+        let Some(id) = a.first().and_then(|s| s.parse::<u32>().ok()) else { return fail("expected document id") };
+        if e.docs.active_id() == id { ok("") } else { fail(format!("active document is {}", e.docs.active_id())) }
     });
 
     c.add("click_item", "click_item <item> [ctrl]", "click the viewport pixel where an item of the active document is (its pivot), as the mouse would", |e, a| {
