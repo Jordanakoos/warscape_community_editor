@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn quantized_noop_keeps_unknown_originals_without_reading_them() {
-        let f = MapFiles { folder: [CHMF, FULL, LQ].into_iter().map(|p| (p.into(), Blob::File(format!("missing-{p}").into()))).collect() };
+        let f = MapFiles { folder: [CHMF, FULL, LQ].into_iter().map(|p| (p.into(), Blob::File(format!("missing-{p}").into()))).collect(), ..Default::default() };
         for amount in [0.0, 0.25, -0.5, 0.5] {
             let out = prepare_delta(&f, &impulse(16, 16, amount)).unwrap();
             assert_eq!(out.height_files, f);
