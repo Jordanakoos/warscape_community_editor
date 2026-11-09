@@ -46,7 +46,7 @@ impl Drop for Scratch {
         MapFiles::from_bytes([
             ("lf_height_map.data".into(), c.write()),
             ("lf_height_map.dds".into(), wce_terrain_io::attila::heights::lf_height_dds(&PagedU16::filled(192,192,10000))),
-            ("lf_height_map_lq.dds".into(), wce_terrain_io::attila::heights::lf_height_dds(&PagedU16::filled(96,96,10000))),
+            // Battle fixture: an LQ companion would deliberately identify an incomplete campaign.
             ("terrain.tile_list".into(), TileList { version:9,is_campaign:false,battle_size:[48,48],..Default::default() }.write()),
             ("normals/normal_0.dds".into(), b"opaque unsupported normals stay original".to_vec()),
         ])

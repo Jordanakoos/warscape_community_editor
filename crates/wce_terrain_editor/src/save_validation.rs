@@ -97,14 +97,18 @@ pub(super) fn preflight(m: &MapModel,files: &MapFiles,dir: &Path) -> Result<BTre
         Ok(_) => {
             let existing=MapFiles::from_dir(dir).map_err(|e|e.to_string())?;
             keys(existing.folder.keys().map(String::as_str))?;
-            for name in existing.folder.keys() {
+            for (name,blob) in &existing.folder {
                 if let Some(output)=outputs.get(&key(name)?) {
-                    if *output!=name {
+                    if *output!=name && !name.eq_ignore_ascii_case(built::campaign_authority::PROJECT_STATE) {
                         return Err(format!("Cannot save: destination key '{name}' differs from output key '{output}'; use a destination that preserves the resource spelling"));
                     }
                 }
                 if !outputs.contains_key(&key(name)?) {
-                    return Err(format!("Cannot save: destination-only reader-visible resource '{name}'; reopen the folder or choose an independent destination"));
+                    // Accepted legacy empty authoring tombstones have no native or authoring effect.
+                    let empty_tombstone=built::campaign_authority::is_built_campaign(m)
+                        && name.eq_ignore_ascii_case(built::campaign_authority::PROJECT_STATE)
+                        && blob.bytes().map_err(|e|e.to_string())?.as_ref()==b"WCHE\0\0\0\0";
+                    if !empty_tombstone { return Err(format!("Cannot save: destination-only reader-visible resource '{name}'; reopen the folder or choose an independent destination")); }
                 }
             }
         }

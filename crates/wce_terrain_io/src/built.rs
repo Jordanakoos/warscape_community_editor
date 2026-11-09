@@ -1,4 +1,4 @@
-//! A battle map in its built form, the only form a game without kit maps has (Rome 2: `terrain/battles/<map>` in its packs; docs/plans/
+//! A map in its built form, the only form a game without kit maps has (Rome 2: `terrain/battles/<map>` or `terrain/campaigns/<map>`; docs/plans/
 //! terrain_editor.md, Phase 9): the files a map's folder holds there, into the model and back.
 //!
 //! - `lf_height_map.dds` (L16, a 128-byte header): the land LF, editable ([`MapModel::lf`], `LfRole::Land`);
@@ -15,7 +15,16 @@
 //! region's tag maximum the shipped one or the region's new maximum, the higher (Rome 2's tags hold the tiles' relief, which the LF
 //! alone does not give: with them kept, 110 of its 111 maps' CHMFs come out byte for byte from their DDS, `built_lf_check`). A shipped
 //! CHMF of another region layout is kept as it was (`settlement_preset`). ASSUMPTION: a lowered region keeps its old tag maximum.
+//!
+//! That LF reconstruction is for battle maps only. Native built campaign LF edits are refused until the source-corner/averaged-DDS and
+//! campaign-normal relationships can be regenerated safely; unchanged campaign resources retain their original bytes, including
+//! after undo. See `docs/formats/built_campaign_heights.md` and [`read_as`] for the caller's map-kind handoff.
+//! [`campaign_heights`] prepares independently witnessed forward deltas from explicit nodal input; its height-only result does not
+//! bypass the native export boundary or imply a normal-generation rule. [`campaign_authority`] retains supported raise/lower inputs
+//! in WCE projects, together with original native baselines; reopening rebuilds the preview, not a compiled native campaign.
 
+mod campaign;
+pub mod campaign_authority;
 pub mod campaign_heights;
 pub mod scene;
 
@@ -57,7 +66,17 @@ fn l16(bytes: &[u8]) -> Option<PagedU16> {
 ///
 /// A file could not be read.
 pub fn read(name: &str, files: &MapFiles) -> Result<MapModel> {
-    let mut m = MapModel { name: name.to_owned(), kind: MapKind::Battle, built: true, disk_source:files.disk_source.clone(), ..Default::default() };
+    read_as(name, MapKind::Battle, files)
+}
+
+/// A built folder whose kind is known by the caller's map routing. The native tile list can also identify a campaign when only a
+/// bare name is available. No particular map name or game is assumed.
+///
+/// # Errors
+///
+/// A file could not be read.
+pub fn read_as(name: &str, kind: MapKind, files: &MapFiles) -> Result<MapModel> {
+    let mut m = MapModel { name: name.to_owned(), kind, built: true, disk_source:files.disk_source.clone(), ..Default::default() };
     for (path, blob) in &files.folder {
         if path.eq_ignore_ascii_case(LF)
             && let Some(f) = l16(&blob.bytes()?)
@@ -70,6 +89,10 @@ pub fn read(name: &str, files: &MapFiles) -> Result<MapModel> {
         } else {
             m.carried.insert(path.clone(), blob.clone());
         }
+    }
+
+    if m.tile_list.as_ref().is_some_and(|t| t.get().is_campaign) {
+        m.kind = MapKind::Campaign;
     }
 
     // A version 6 tile map's placements (the seven `main_*` maps).
@@ -85,6 +108,7 @@ pub fn read(name: &str, files: &MapFiles) -> Result<MapModel> {
         m.built_scene = Some(source);
     }
 
+    campaign_authority::restore(&mut m)?;
     Ok(m)
 }
 
@@ -141,9 +165,12 @@ pub fn write_project(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::Ti
 }
 
 fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>, project: bool) -> Result<MapFiles> {
+    // Native output refuses unsupported effective height changes. Campaign project save retains authoring state separately.
+    let campaign = campaign::check_heights(m)?;
     let scene = scene::plan(m, project)?;
     let mut folder: BTreeMap<String, Blob> = m.carried.clone();
     folder.extend(scene);
+    folder.retain(|p, _| !p.eq_ignore_ascii_case(campaign_authority::PROJECT_STATE));
 
     if let Some(t) = &m.tile_list {
         if t.path == TILE_MAP_VIEW {
@@ -175,7 +202,7 @@ fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
         }
     }
     for (_, item) in &m.lf {
-        if !item.edited() {
+        if campaign || !item.edited() {
             folder.insert(item.path.clone(), item.origin.clone());
             continue;
         }
