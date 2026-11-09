@@ -54,7 +54,8 @@ impl Drop for Scratch {
 
 fn doc(m:MapModel)->MapDocument {
     let db=Arc::new(TileDatabase::default());
-    let placed=PlacedMap::from_tile_list("test",m.tile_list.as_ref().unwrap().get(),&db,None);
+    let list=m.tile_list.as_ref().map(|i|i.get().clone()).unwrap_or_default();
+    let placed=PlacedMap::from_tile_list("test",&list,&db,None);
     MapDocument::new("test".into(),MapSource::Kit(PathBuf::new()),Some(m),Arc::new(placed),None,db)
 }
 fn changed(d:&mut MapDocument) {
@@ -79,7 +80,7 @@ fn staging_failure_preserves_all_existing_outputs_history_and_destination() {
     assert!(d.save(&SaveTarget{path:out.clone()}).is_err());
     assert_eq!(state(&d),before);assert_eq!(disk(&out),original);
     std::fs::write(missing,b"recovered source").unwrap();
-    d.save(&SaveTarget{path:out.clone()}).unwrap();
+    d.save_overwrite(&SaveTarget{path:out.clone()}).unwrap();
     assert_eq!(d.save_dir,Some(out.clone()));assert!(!d.modified());
     assert_eq!(std::fs::read(out.join("z-last.bin")).unwrap(),b"recovered source");
 }
@@ -125,7 +126,7 @@ fn equal_size_file_is_compared_by_content_and_identical_readonly_output_is_retai
     let root=Scratch::new();let source=root.0.join("source.bin");std::fs::write(&source,b"right").unwrap();
     let mut model=built::read("test",&fixture()).unwrap();model.carried.insert("opaque.bin".into(),Blob::File(source));
     let mut d=doc(model);let out=root.0.join("out");std::fs::create_dir(&out).unwrap();std::fs::write(out.join("opaque.bin"),b"wrong").unwrap();
-    d.save(&SaveTarget{path:out.clone()}).unwrap();assert_eq!(std::fs::read(out.join("opaque.bin")).unwrap(),b"right");
+    d.save_overwrite(&SaveTarget{path:out.clone()}).unwrap();assert_eq!(std::fs::read(out.join("opaque.bin")).unwrap(),b"right");
     let path=out.join("opaque.bin");let original=std::fs::metadata(&path).unwrap().permissions();let mut readonly=original.clone();readonly.set_readonly(true);std::fs::set_permissions(&path,readonly).unwrap();
     let result=d.save(&SaveTarget::default());std::fs::set_permissions(&path,original).unwrap();result.unwrap();
 }
@@ -167,3 +168,5 @@ fn wce_tile_io_for_test_dds(pixels:&[u8])->Vec<u8>{
     for (at,value) in [(4,124u32),(8,0x100f),(12,256),(16,256),(20,1024),(76,32),(80,0x41),(88,32),(92,0x00ff0000),(96,0x0000ff00),(100,0x000000ff),(104,0xff000000),(108,0x1000)]{b[at..at+4].copy_from_slice(&value.to_le_bytes());}
     b.extend_from_slice(pixels);b
 }
+
+mod freshness { use super::*; include!("freshness_tests.rs"); }

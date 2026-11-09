@@ -1540,6 +1540,23 @@ impl Editor {
         Ok(message)
     }
 
+    fn draw_changed_save_prompt(&mut self) {
+        let Some(pending)=self.docs.pending_changed_save().cloned() else{return};
+        gui::open_popup("Files changed on disk");
+        let mut open=true;
+        if !gui::begin_popup_modal("Files changed on disk",Some(&mut open),gui::WINDOW_ALWAYS_AUTO_RESIZE){return}
+        gui::text(&pending.reason);
+        let answer=if gui::button("Overwrite"){Some(true)}else{None};
+        gui::same_line();
+        let answer=if gui::button("Cancel") || !open || gui::is_key_pressed(gui::KEY_ESCAPE,false){Some(false)}else{answer};
+        if let Some(overwrite)=answer {
+            let result=self.docs.answer_changed_save(overwrite);
+            self.status=match result{Ok(s)=>s,Err(e)=>e};
+            gui::close_current_popup();
+        }
+        gui::end_popup();
+    }
+
     fn draw_prompt(&mut self) {
         if self.prompt == PromptKind::None {
             return;
@@ -1751,6 +1768,7 @@ impl Editor {
         }
 
         self.draw_prompt();
+        self.draw_changed_save_prompt();
     }
 
     pub fn focus_selection(&mut self) {

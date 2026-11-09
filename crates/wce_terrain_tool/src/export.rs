@@ -72,7 +72,7 @@ pub fn pack_files(map: &str, files: &[(String, Vec<u8>)]) -> Vec<(String, Vec<u8
 }
 
 /// Writes an export's files loose and as a pack (`profile`: the game's, for the pack format).
-fn write(out: &Path, map: &str, files: &[(String, Vec<u8>)], profile: &wce_vfs::GameProfile, model:&wce_terrain::MapModel,normals:&std::sync::Mutex<std::collections::BTreeMap<String,Arc<[u8]>>>) -> Result<(PathBuf, PathBuf), String> {
+fn write(out: &Path, map: &str, files: &[(String, Vec<u8>)], profile: &wce_vfs::GameProfile, model:&wce_terrain::MapModel,normals:&std::sync::Mutex<std::collections::BTreeMap<String,Arc<[u8]>>>,changes:&std::sync::Mutex<wce_foundation::disk_changes::Changes>,attempt:wce_foundation::disk_changes::Attempt) -> Result<(PathBuf, PathBuf), String> {
     use wce_foundation::publication::{Output,Source,Staged};
     let (game,name)=game_folder(map);let folder=out.join(&game);let pack=out.join(format!("terrain_{name}.pack"));
     let mut outputs=vec![];
@@ -85,6 +85,7 @@ fn write(out: &Path, map: &str, files: &[(String, Vec<u8>)], profile: &wce_vfs::
     wce_vfs::mod_pack::write_new(profile,&work,&pack_files(map,files))?;
     let mut pack_output=Output::new(pack.clone(),Source::File(work));pack_output.priority=5;outputs.push(pack_output);
     let staged=Staged::prepare(outputs).map_err(|e|e.to_string())?;
+    attempt.recheck()?;
     let mut inputs=normals.lock().map_err(|e|e.to_string())?;
     for (key,_) in files {
         if key.to_ascii_lowercase().starts_with("normals/") && !inputs.contains_key(key)
@@ -93,7 +94,9 @@ fn write(out: &Path, map: &str, files: &[(String, Vec<u8>)], profile: &wce_vfs::
     }
     drop(inputs);
     let lf_source=model.lf(wce_terrain::LfRole::Land).and_then(|i|match &i.origin{wce_tile_model::Blob::File(p)=>wce_foundation::save_path::key(p).ok(),_=>None});
-    staged.publish_checked(|_|Ok(()),|p|{
+    let attempt=std::cell::RefCell::new(attempt);
+    staged.publish_checked(|p|attempt.borrow().check_target(p),|p|{
+        attempt.borrow_mut().published(p)?;changes.lock().map_err(|e|e.to_string())?.note_owned(p)?;
         if lf_source.as_ref().is_some_and(|source|wce_foundation::save_path::key(p).as_ref()==Ok(source)){normals.lock().map_err(|e|e.to_string())?.clear();}Ok(())
     }).map_err(|e|e.to_string())?;
     Ok((folder,pack))
@@ -108,7 +111,9 @@ pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[Pa
     let d = e.docs.find_as::<MapDocument>(doc).ok_or("no map shown")?;
     let lease=d.begin_io()?;
     let model=d.publication_model()?;
+    let changes=d.io_changes.clone();
     let normals=d.normal_inputs();
+    let attempt=changes.lock().map_err(|e|e.to_string())?.begin_export(&out)?;
     let map = d.name.clone();
     let revision = wce_editor_core::document::Document::history(d).version();
     let env = kit_file(kit_roots, "warscape_asset_variation_db/environment_map.xml");
@@ -123,7 +128,7 @@ pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[Pa
         let built = if model.built { Some(built_changes(&model, &db, &name, packs.as_deref())) } else { None };
         let r = built.unwrap_or_else(|| build(&model, &BuildInputs { db: &db, environment_map: &env, tile_upgrades: &upgrades }).map_err(|err| err.to_string()))
             .and_then(|b| {
-                let (folder, pack) = write(&out, &name, &b.files, profile, &model, &normals)?;
+                let (folder, pack) = write(&out, &name, &b.files, profile, &model, &normals, &changes, attempt)?;
                 Ok(Exported { map: name.clone(), revision, folder, pack, files: b.files, messages: b.messages, secs: t0.elapsed().as_secs_f64() })
             });
         let _ = tx.send(r);
@@ -167,9 +172,9 @@ pub fn summary(x: &Exported) -> String {
     use super::*;
     #[test]fn step_c_export_stages_pack_and_loose_files_and_retains_exact_content(){
         let root=std::env::temp_dir().join(format!("wce-terrain-export-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&root).unwrap();
-        let normals=std::sync::Mutex::new(Default::default());let model=wce_terrain::MapModel::default();
+        let changes=std::sync::Mutex::new(wce_foundation::disk_changes::Changes::default());let normals=std::sync::Mutex::new(Default::default());let model=wce_terrain::MapModel::default();
         let files=vec![("opaque.bin".into(),b"native bytes".to_vec()),("lf_height_map.dds".into(),b"LF baseline".to_vec())];
-        let run=|files:&[(String,Vec<u8>)]|{write(&root,"map",files,&wce_vfs::GameProfile::ROME_2,&model,&normals)};
+        let run=|files:&[(String,Vec<u8>)]|{let attempt=changes.lock().unwrap().begin_export(&root).unwrap();write(&root,"map",files,&wce_vfs::GameProfile::ROME_2,&model,&normals,&changes,attempt)};
         let(folder,pack)=run(&files).unwrap();let old=std::fs::read(folder.join("opaque.bin")).unwrap();let modified=std::fs::metadata(folder.join("opaque.bin")).unwrap().modified().unwrap();run(&files).unwrap();assert_eq!(std::fs::metadata(folder.join("opaque.bin")).unwrap().modified().unwrap(),modified);
         let original=std::fs::metadata(&pack).unwrap().permissions();let mut p=original.clone();p.set_readonly(true);std::fs::set_permissions(&pack,p).unwrap();
         let changed=vec![("opaque.bin".into(),b"changed bytes".to_vec())];assert!(run(&changed).is_err());assert_eq!(std::fs::read(folder.join("opaque.bin")).unwrap(),old);std::fs::set_permissions(&pack,original).unwrap();

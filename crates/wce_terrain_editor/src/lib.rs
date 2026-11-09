@@ -3,6 +3,7 @@
 pub mod cells;
 pub mod document;
 pub mod lf;
+mod save_validation;
 pub mod terry;
 
 pub use document::{MapDocument, MapSource};

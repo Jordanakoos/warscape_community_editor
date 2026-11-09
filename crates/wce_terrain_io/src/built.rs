@@ -57,7 +57,7 @@ fn l16(bytes: &[u8]) -> Option<PagedU16> {
 ///
 /// A file could not be read.
 pub fn read(name: &str, files: &MapFiles) -> Result<MapModel> {
-    let mut m = MapModel { name: name.to_owned(), kind: MapKind::Battle, built: true, ..Default::default() };
+    let mut m = MapModel { name: name.to_owned(), kind: MapKind::Battle, built: true, disk_source:files.disk_source.clone(), ..Default::default() };
     for (path, blob) in &files.folder {
         if path.eq_ignore_ascii_case(LF)
             && let Some(f) = l16(&blob.bytes()?)
@@ -208,7 +208,7 @@ pub fn write(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
         }
     }
 
-    Ok(MapFiles { folder })
+    Ok(MapFiles { folder,..Default::default() })
 }
 
 /// The files of `written` that differ from `read` (or are new): what an export of an edited built map needs.
@@ -239,7 +239,7 @@ mod tests {
         let files = MapFiles { folder: BTreeMap::from([
             (LF.to_owned(), Blob::Bytes(Arc::from(dds(8, 8, &samples)))),
             ("terrain.tile_list".to_owned(), Blob::Bytes(Arc::from(vec![1u8, 2, 3]))),
-        ]) };
+        ]),..Default::default() };
 
         let mut m = read("x", &files).unwrap();
         assert!(m.built && m.lf.len() == 1 && m.carried.len() == 1);
