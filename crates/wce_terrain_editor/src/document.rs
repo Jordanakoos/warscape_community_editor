@@ -600,7 +600,7 @@ impl MapDocument {
         let dir = if target.path.as_os_str().is_empty() { self.save_dir.clone().ok_or("no projects folder to save into")? } else { target.path.clone() };
         let model = self.model().ok_or("a map of the game's packs is read-only")?;
         let writing=self.publication_model()?;
-        let files = if writing.built { wce_terrain_io::built::write(&writing, Some(&self.db)) } else { wce_terrain_io::attila::write(&writing) }.map_err(|e| e.to_string())?;
+        let files = if writing.built { wce_terrain_io::built::write_project(&writing, Some(&self.db)) } else { wce_terrain_io::attila::write(&writing) }.map_err(|e| e.to_string())?;
         let retained = crate::save_validation::preflight(model, &files, &dir)?;
         let attempt=std::cell::RefCell::new(self.io_changes.lock().map_err(|e|e.to_string())?.begin(&dir,overwrite)?);
         let outputs=files.folder.iter().filter(|(name,_)|!retained.contains(*name)).map(|(name,blob)| {
