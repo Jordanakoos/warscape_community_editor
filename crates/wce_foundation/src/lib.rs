@@ -8,6 +8,7 @@ pub mod heap;
 pub mod jobs;
 pub mod log;
 pub mod math;
+pub mod operation;
 pub mod profile;
 pub mod publication;
 pub mod samples;

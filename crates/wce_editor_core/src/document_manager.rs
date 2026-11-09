@@ -37,6 +37,11 @@ impl DocumentManager {
     ///
     /// The tool has a document already (a stand-in aside): the caller closes it first (`Editor` replaces it, asking about unsaved changes).
     pub fn add(&mut self, scene: &mut RenderScene, mut doc: Box<dyn Document>, tool_id: &str) -> Result<DocumentId, String> {
+        if let Some(path) = doc.save_destination()
+            && let Some(id) = self.destination_owner(&path, None)? {
+            if self.tool_of(id) != tool_id { return Err("Save destination is owned by another tool".into()); }
+            return Ok(id);
+        }
         if !doc.stand_in()
             && let Some(old) = self.of_tool(tool_id).and_then(|id| self.find(id))
         {
@@ -185,12 +190,32 @@ impl DocumentManager {
     ///
     /// Why it could not be saved. On success the message says what was saved.
     pub fn save_one(&mut self, id: DocumentId) -> Result<String, String> {
+        self.save_to(id,&SaveTarget::default())
+    }
+
+    pub fn destination_owner(&self,path:&std::path::Path,except:Option<DocumentId>) -> Result<Option<DocumentId>,String> {
+        let key=wce_foundation::save_path::key(path)?;
+        for e in &self.entries {
+            if Some(e.doc.id())!=except
+                && let Some(p)=e.doc.save_destination()
+                && wce_foundation::save_path::key(&p)?==key { return Ok(Some(e.doc.id())); }
+        }
+        Ok(None)
+    }
+
+    /// Shared live Save/Save As boundary; ownership is checked before calling the document.
+    pub fn save_to(&mut self,id:DocumentId,target:&SaveTarget) -> Result<String,String> {
+        let d=self.find(id).ok_or("no such document")?;
+        let destination=if target.path.as_os_str().is_empty(){d.save_destination()}else{d.save_destination().map(|_|target.path.clone())};
+        if let Some(path)=destination && let Some(owner)=self.destination_owner(&path,Some(id))? {
+            return Err(format!("Cannot save: {} is already owned by open document {owner}",path.display()));
+        }
         let Some(e) = self.entry_mut(id) else { return Err("no such document".to_owned()) };
         if !e.doc.can_save() {
             return Err(format!("{} cannot be saved", e.doc.title()));
         }
 
-        e.doc.save(&SaveTarget::default())?;
+        e.doc.save(target)?;
         e.doc.history_mut().mark_saved();
         let key = e.doc.source_key();
         let message = match e.doc.save_message() {
