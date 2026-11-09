@@ -31,7 +31,6 @@ use crate::{MapFiles, Result, file_error};
 const LF: &str = "lf_height_map.dds";
 const CHMF: &str = "lf_height_map.data";
 const LIST: &str = "terrain.tile_list";
-const BLM: &str = "locations.blm";
 
 /// The placements of a version 6 tile map (no file: the tile map is theirs).
 pub const TILE_MAP_VIEW: &str = "tile_map.tiles (placements)";
@@ -80,17 +79,9 @@ pub fn read(name: &str, files: &MapFiles) -> Result<MapModel> {
     }
 
     // The battle locations as a scene (the seven `main_*` maps).
-    if let Some(blm) = locations(&m) {
-        let mut deployments = BTreeMap::new();
-        for (path, blob) in &m.carried {
-            let n = path.strip_prefix("deployment/").and_then(|f| f.strip_prefix("deployment_")).and_then(|f| f.strip_suffix(".xml")).and_then(|f| f.parse::<u32>().ok());
-            if let Some(n) = n {
-                deployments.insert(n, wce_tile::vegetation::ca_xml::parse(&blob.bytes()?));
-            }
-        }
-
-        let p = scene::scene(&blm, &deployments).map_err(|e| file_error(BLM, e))?;
+    if let Some((p, source)) = scene::load(&m)? {
         m.project = Some(Item::new(SCENE, p, Blob::Bytes(Arc::from(&[][..]))));
+        m.built_scene = Some(source);
     }
 
     Ok(m)
@@ -100,12 +91,6 @@ pub fn read(name: &str, files: &MapFiles) -> Result<MapModel> {
 fn tile_map(m: &MapModel) -> Option<wce_tile::battle_map::tile_map::TileMap> {
     let read = |n: &str| m.carried.iter().find(|(p, _)| p.eq_ignore_ascii_case(n)).and_then(|(_, b)| b.bytes().ok());
     wce_tile::battle_map::tile_map::TileMap::parse(&read("tile_map.index")?, &read("tile_map.tiles")?).ok()
-}
-
-/// The map's `locations.blm`, version 7 (Rome 2's).
-fn locations(m: &MapModel) -> Option<wce_tile::battle_map::locations::BattleLocations> {
-    let b = m.carried.iter().find(|(p, _)| p.eq_ignore_ascii_case(BLM))?.1.bytes().ok()?;
-    wce_tile::battle_map::locations::BattleLocations::parse(&b).ok().filter(|l| l.version == 7)
 }
 
 /// The map's size in cells: its tile list's battle size, else its tile map's.
@@ -145,17 +130,19 @@ pub fn chmf(field: &PagedU16, cells: (u32, u32), shipped: Option<&[u8]>) -> Opti
 ///
 /// The LF's original file can't be read.
 pub fn write(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>) -> Result<MapFiles> {
+    write_for(m, db, false)
+}
+
+/// Project Save must not claim persistence of scene metadata absent from the native project files.
+/// Publication and filesystem ownership remain the caller's responsibility.
+pub fn write_project(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>) -> Result<MapFiles> {
+    write_for(m, db, true)
+}
+
+fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>, project: bool) -> Result<MapFiles> {
+    let scene = scene::plan(m, project)?;
     let mut folder: BTreeMap<String, Blob> = m.carried.clone();
-    if let Some(p) = m.project.as_ref().filter(|p| p.edited())
-        && let Some(original) = locations(m)
-    {
-        let (blm, deployments) = scene::write(p.get(), &original)?;
-        let key = folder.keys().find(|k| k.eq_ignore_ascii_case(BLM)).cloned().unwrap_or_else(|| BLM.to_owned());
-        folder.insert(key, Blob::Bytes(Arc::from(blm)));
-        for (name, bytes) in deployments {
-            folder.insert(name, Blob::Bytes(Arc::from(bytes)));
-        }
-    }
+    folder.extend(scene);
 
     if let Some(t) = &m.tile_list {
         if t.path == TILE_MAP_VIEW {
