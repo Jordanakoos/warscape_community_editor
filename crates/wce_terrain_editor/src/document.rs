@@ -28,6 +28,8 @@ pub enum MapSource {
 pub struct MapDocument {
     core: DocumentCore,
     history: CommandStack<Option<MapModel>>,
+    active_campaign: Option<(u64, crate::campaign_lf::CampaignStroke)>,
+    campaign_ticket: u64,
     // Only live source bytes, never prepared outputs: a partially published normal cannot
     // become the input of the same LF adjustment twice. Released when its LF publishes.
     normal_source_bytes: Arc<std::sync::Mutex<std::collections::BTreeMap<String,Arc<[u8]>>>>,
@@ -148,7 +150,7 @@ fn choices_of(attr: &str) -> &'static [&'static str] {
 impl MapDocument {
     pub fn new(name: String, source: MapSource, model: Option<MapModel>, placed: Arc<PlacedMap>, locations: Option<BattleLocations>, db: Arc<TileDatabase>) -> Self {
         let io_changes=Arc::new(std::sync::Mutex::new(wce_foundation::disk_changes::Changes::new(model.as_ref().and_then(|m|m.disk_source.as_deref()))));
-        Self { io_changes, io_gate:Default::default(), normal_source_bytes:Default::default(), #[cfg(test)] publication_failure_after:None, core: DocumentCore::new(), history: CommandStack::new(model), name, source, placed, locations, db, save_dir: None, message: None, cells: Arc::default(), fill_messages: vec![],
+        Self { io_gate:Default::default(),io_changes, core: DocumentCore::new(), history: CommandStack::new(model), active_campaign: None, campaign_ticket: 0, normal_source_bytes:Default::default(), #[cfg(test)] publication_failure_after:None, name, source, placed, locations, db, save_dir: None, message: None, cells: Arc::default(), fill_messages: vec![],
             terry_revision: Arc::default(), terry_frame: TerryFrame::BATTLE, gesture: None, view_roads: None, roads_at_start: true,
         }
     }
@@ -190,6 +192,7 @@ impl MapDocument {
 
     /// A `.terry` edit onto the history (applied by pushing it, or already done: `TerrySpliceCommand::done`).
     pub fn push_terry(&mut self, cmd: Box<dyn wce_editor_core::command::Command<Option<MapModel>>>) {
+        if !self.resolve_campaign_history() { return; }
         self.history.push(cmd);
         self.terry_revision.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -236,6 +239,7 @@ impl MapDocument {
 
     /// A finished cell stroke onto the history (in the layer already).
     pub fn push_cells(&mut self, cmd: crate::cells::CellStrokeCommand) {
+        if !self.resolve_campaign_history() { return; }
         use wce_editor_core::command::History;
         self.history.push(Box::new(cmd));
         self.history.break_merge();
@@ -243,23 +247,90 @@ impl MapDocument {
 
     /// An edit of the explicit tiles onto the history (applied by pushing it).
     pub fn push_explicit(&mut self, cmd: crate::cells::ExplicitCommand) {
+        if !self.resolve_campaign_history() { return; }
         use wce_editor_core::command::History;
         self.history.push(Box::new(cmd));
         self.history.break_merge();
     }
 
     /// An edit of a built map's placements onto the history (applied).
-    pub fn push_tile_list(&mut self, cmd: crate::cells::TileListCommand) {
+    ///
+    /// # Errors
+    ///
+    /// The active campaign stroke cannot resolve; the placement command is not applied.
+    pub fn push_tile_list(&mut self, cmd: crate::cells::TileListCommand) -> Result<(), String> {
+        self.resolve_campaign()?;
+        use wce_editor_core::command::History;
+        self.history.push(Box::new(cmd));
+        self.history.break_merge();
+        Ok(())
+    }
+
+    /// A finished stroke onto the history (it is in the field already: applying it again changes nothing).
+    pub fn push_stroke(&mut self, cmd: crate::lf::LfStrokeCommand) {
+        if !self.resolve_campaign_history() { return; }
         use wce_editor_core::command::History;
         self.history.push(Box::new(cmd));
         self.history.break_merge();
     }
 
-    /// A finished stroke onto the history (it is in the field already: applying it again changes nothing).
-    pub fn push_stroke(&mut self, cmd: crate::lf::LfStrokeCommand) {
-        use wce_editor_core::command::History;
+    /// The campaign-specific raise/lower command uses the same history and full-preview mirror as ordinary LF commands.
+    pub fn push_campaign_stroke(&mut self, cmd: crate::campaign_lf::CampaignStrokeCommand) {
+        if !self.resolve_campaign_history() { return; }
         self.history.push(Box::new(cmd));
         self.history.break_merge();
+    }
+
+    /// The document owns the stroke; the tool holds only a ticket that expires on global history/save resolution.
+    pub fn begin_campaign_stroke(&mut self, game: &wce_foundation::game::GameProfile, mirror: Option<Arc<crate::lf::LfMirror>>) -> Result<u64, String> {
+        if self.active_campaign.is_some() { return Err("Release the active campaign stroke before starting another".into()); }
+        let stroke = crate::campaign_lf::CampaignStroke::begin(self.model().ok_or("no map model")?, game, mirror, self.history.version())?;
+        self.campaign_ticket += 1;
+        self.active_campaign = Some((self.campaign_ticket, stroke));
+        Ok(self.campaign_ticket)
+    }
+
+    pub fn campaign_dab(&mut self, ticket: u64, brush: &wce_terrain::lf_edit::LfBrush, amount: f64) -> Result<Option<[u32; 4]>, String> {
+        let version = self.history.version();
+        let (_, stroke) = self.active_campaign.as_mut().filter(|(id, _)| *id == ticket).ok_or("Campaign stroke is no longer active; release it and start a new stroke")?;
+        stroke.dab(self.history.model_mut().as_mut().ok_or("no map model")?, brush, amount, version)
+    }
+
+    pub fn campaign_stroke_active(&self, ticket: u64) -> bool { self.active_campaign.as_ref().is_some_and(|(id, _)| *id == ticket) }
+
+    pub fn finish_campaign_stroke(&mut self, ticket: u64) -> Result<Option<usize>, String> {
+        let command = self.prepare_campaign_resolution(ticket)?;
+        Ok(command.map(|command| {
+            let bytes = command.bytes();
+            self.history.push(Box::new(command));
+            self.history.break_merge();
+            bytes
+        }))
+    }
+
+    pub fn cancel_campaign_stroke(&mut self, ticket: u64) -> Result<(), String> {
+        if let Some(mut command) = self.prepare_campaign_resolution(ticket)? {
+            wce_editor_core::command::Command::revert(&mut command, self.history.model_mut());
+        }
+        Ok(())
+    }
+
+    fn prepare_campaign_resolution(&mut self, ticket: u64) -> Result<Option<crate::campaign_lf::CampaignStrokeCommand>, String> {
+        let (_, stroke) = self.active_campaign.as_mut().filter(|(id, _)| *id == ticket).ok_or("Campaign stroke is no longer active")?;
+        let command = stroke.resolve(self.history.model().as_ref().ok_or("no map model")?, self.history.version())?;
+        // Resolution has validated authority/resources and prepared the complete recovery command.
+        // On any error above, the original active stroke, ticket and page snapshots remain intact.
+        self.active_campaign = None;
+        Ok(command)
+    }
+
+    fn resolve_campaign(&mut self) -> Result<(), String> {
+        if let Some((ticket, _)) = self.active_campaign.as_ref() { self.finish_campaign_stroke(*ticket)?; }
+        Ok(())
+    }
+
+    fn resolve_campaign_history(&mut self) -> bool {
+        match self.resolve_campaign() { Ok(()) => true, Err(e) => { self.message = Some(e); false } }
     }
 
     /// A line for the panel: the map's size and what it holds.
@@ -282,6 +353,27 @@ impl MapDocument {
     }
 }
 
+/// Resolve campaign gestures at the actual mutation boundary, including History-panel jumps.
+/// Reading history or borrowing this facade never ends a drag. Other map brush paths are unchanged.
+impl History for MapDocument {
+    fn undo(&mut self) -> bool { self.resolve_campaign_history() && self.history.undo() }
+    fn redo(&mut self) -> bool { self.resolve_campaign_history() && self.history.redo() }
+    fn can_undo(&self) -> bool { self.history.can_undo() || self.active_campaign.as_ref().is_some_and(|(_, s)| s.changed()) }
+    fn can_redo(&self) -> bool { !self.active_campaign.as_ref().is_some_and(|(_, s)| s.changed()) && self.history.can_redo() }
+    fn break_merge(&mut self) { self.history.break_merge(); }
+    fn drop_redo(&mut self) { if self.resolve_campaign_history() { self.history.drop_redo(); } }
+    fn size(&self) -> usize { self.history.size() }
+    fn position(&self) -> usize { self.history.position() }
+    fn name(&self, i: usize) -> String { self.history.name(i) }
+    fn jump_to(&mut self, p: usize) { if self.resolve_campaign_history() { self.history.jump_to(p); } }
+    fn mark_saved(&mut self) { if self.resolve_campaign_history() { self.history.mark_saved(); } }
+    fn modified(&self) -> bool { self.history.modified() || self.active_campaign.as_ref().is_some_and(|(_, s)| s.changed()) }
+    fn version(&self) -> u64 { self.history.version() }
+    fn last_dirty(&self) -> &wce_editor_core::command::Dirty { self.history.last_dirty() }
+    fn take_dirty(&mut self) -> wce_editor_core::command::Dirty { self.history.take_dirty() }
+    fn clear(&mut self) { if self.resolve_campaign_history() { self.history.clear(); } }
+}
+
 impl Document for MapDocument {
     fn core(&self) -> &DocumentCore {
         &self.core
@@ -292,11 +384,11 @@ impl Document for MapDocument {
     }
 
     fn history(&self) -> &dyn History {
-        &self.history
+        self
     }
 
     fn history_mut(&mut self) -> &mut dyn History {
-        &mut self.history
+        self
     }
 
     fn title(&self) -> String {
@@ -305,6 +397,10 @@ impl Document for MapDocument {
 
     fn kind(&self) -> String {
         "battle_map".to_owned()
+    }
+
+    fn prepare_deactivate(&mut self) -> Result<(), String> {
+        self.resolve_campaign().map_err(|err| format!("Cannot switch maps: {err}. Restore the campaign height resources, then finish or cancel the stroke and retry"))
     }
 
     /// Nothing of its own: the tool's map view is on the scene.
@@ -320,7 +416,8 @@ impl Document for MapDocument {
         self.message.clone()
     }
 
-    /// Stage the complete native output before per-file publication; exact content is retained.
+    /// The map's folder into the projects' kit layout: the files made again from the model where they were edited (the others as they
+    /// were: copied the first time, then retained only when their contents are identical).
     fn save(&mut self,target:&SaveTarget)->Result<(),String>{self.save_native(target,false)}
     fn save_overwrite(&mut self,target:&SaveTarget)->Result<(),String>{self.save_native(target,true)}
     fn save_changes(&self,target:&SaveTarget)->Result<Option<String>,String>{
@@ -620,6 +717,7 @@ impl MapDocument {
         }
         attempt.borrow().recheck()?;
         // Preflight rejection leaves active/history/dirty state untouched. A successful save publishes a completed stroke only.
+        self.resolve_campaign()?;
         self.normal_source_bytes.lock().map_err(|e|e.to_string())?.extend(normal_sources);
         let model = self.model().ok_or("no map model")?;
         // Detach this document's mapped LF before replacement on Windows. Publication uses

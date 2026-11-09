@@ -1,6 +1,7 @@
 //! The Terrain tool's document: a battle map open in the editor (docs/plans/terrain_editor.md, Phase 2).
 
 pub mod cells;
+pub mod campaign_lf;
 pub mod document;
 pub mod lf;
 mod save_validation;
@@ -10,3 +11,7 @@ pub use document::{MapDocument, MapSource};
 
 #[cfg(test)]
 mod publication_tests;
+
+#[cfg(test)]
+#[path="../tests/common/map_fixture.rs"]
+mod map_fixture;

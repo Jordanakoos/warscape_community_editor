@@ -63,6 +63,10 @@ pub trait Document: Any {
         self.history().modified()
     }
 
+    /// Resolve a document-owned gesture before changing the active history/inspector target.
+    /// A failure keeps this document active. Documents without such gestures do nothing.
+    fn prepare_deactivate(&mut self) -> Result<(), String> { Ok(()) }
+
     fn can_save(&self) -> bool {
         false
     }
