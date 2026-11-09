@@ -126,6 +126,8 @@ struct NumberDoc {
     role: Role,
     saves: i32,
     publishes: i32,
+    veto: bool,
+    deactivations: usize,
 }
 
 impl NumberDoc {
@@ -134,7 +136,7 @@ impl NumberDoc {
     }
 
     fn with_role(n: usize, role: Role) -> Self {
-        Self { core: DocumentCore::new(), history: CommandStack::new(vec![0.0; n]), role, saves: 0, publishes: 0 }
+        Self { core: DocumentCore::new(), history: CommandStack::new(vec![0.0; n]), role, saves: 0, publishes: 0, veto: false, deactivations: 0 }
     }
 
     fn values(&self) -> &[f32] {
@@ -192,6 +194,10 @@ impl Command<Vec<f32>> for SetCommand {
 }
 
 impl Document for NumberDoc {
+    fn prepare_deactivate(&mut self) -> Result<(), String> {
+        self.deactivations += 1;
+        if self.veto { Err("restore the missing resource, resolve the gesture and retry".into()) } else { Ok(()) }
+    }
     fn core(&self) -> &DocumentCore {
         &self.core
     }
@@ -332,6 +338,80 @@ fn number_doc(docs: &DocumentManager, id: u32) -> &NumberDoc {
 
 fn number_doc_mut(docs: &mut DocumentManager, id: u32) -> &mut NumberDoc {
     docs.find_as_mut::<NumberDoc>(id).unwrap()
+}
+
+#[test]
+fn checked_selection_preserves_inspector_and_history_on_refusal() {
+    use wce_editor_core::selection::SelectionOp;
+    for op in [SelectionOp::Set, SelectionOp::Add, SelectionOp::Toggle] {
+        let mut scene=RenderScene::default();let mut docs=DocumentManager::default();
+        let a=docs.add(&mut scene,Box::new(NumberDoc::new(2)),"t").unwrap();let b=docs.add(&mut scene,Box::new(NumberDoc::new(2)),"u").unwrap();docs.try_set_active(a).unwrap();
+        let mut selection=Selection::default();selection.set(SourceRef{doc:a,item:0});let before=selection.items().to_vec();let revision=selection.revision();
+        number_doc_mut(&mut docs,a).veto=true;
+        for _ in 0..3 {assert!(docs.try_select(&mut selection,SourceRef{doc:b,item:0},op).is_err());assert_eq!(selection.items(),before);assert_eq!(selection.revision(),revision);assert_eq!(docs.active_id(),a);}
+        // The same primary source the generic inspector dispatches through still belongs to A.
+        let selected=selection.items()[0];let mut inspector=RecordingInspector{edit_next:true,value_to_set:7.,..Default::default()};
+        docs.find_mut(selected.doc).unwrap().inspect(selected,&mut inspector);assert_eq!(number_doc(&docs,a).values()[0],7.);assert_eq!(number_doc(&docs,b).values()[0],0.);
+        assert!(docs.active_mut().unwrap().history_mut().undo());assert_eq!(number_doc(&docs,a).values()[0],0.);
+        assert!(docs.active_mut().unwrap().history_mut().redo());assert_eq!(number_doc(&docs,a).values()[0],7.);
+        number_doc_mut(&mut docs,a).veto=false;docs.try_select(&mut selection,SourceRef{doc:b,item:0},SelectionOp::Set).unwrap();
+        assert_eq!(docs.active_id(),b);assert_eq!(selection.items(),[SourceRef{doc:b,item:0}]);
+    }
+}
+
+#[test]
+fn checked_selection_retains_successful_set_toggle_add_and_rejects_missing_targets() {
+    use wce_editor_core::selection::SelectionOp;
+    let mut scene=RenderScene::default();let mut docs=DocumentManager::default();let a=docs.add(&mut scene,Box::new(NumberDoc::new(3)),"t").unwrap();docs.try_set_active(a).unwrap();
+    number_doc_mut(&mut docs,a).veto=true;let mut actual=Selection::default();let mut expected=Selection::default();
+    for (op,item) in [(SelectionOp::Set,0),(SelectionOp::Add,1),(SelectionOp::Add,1),(SelectionOp::Toggle,0),(SelectionOp::Toggle,2),(SelectionOp::Set,1)] {
+        let r=SourceRef{doc:a,item};docs.try_select(&mut actual,r,op).unwrap();match op{SelectionOp::Set=>expected.set(r),SelectionOp::Add=>expected.add(r),SelectionOp::Toggle=>expected.toggle(r)}
+        assert_eq!(actual.items(),expected.items());assert_eq!(actual.revision(),expected.revision());
+    }
+    let before=actual.items().to_vec();let revision=actual.revision();
+    for id in [0,u32::MAX] {assert!(docs.try_set_active(id).is_err());assert!(docs.try_select(&mut actual,SourceRef{doc:id,item:0},SelectionOp::Set).is_err());assert_eq!(docs.active_id(),a);assert_eq!(actual.items(),before);assert_eq!(actual.revision(),revision);}
+}
+
+#[test]
+fn background_addition_and_checked_tool_switch_preserve_one_document_rule() {
+    let mut scene=RenderScene::default();let mut docs=DocumentManager::default();
+    let a=docs.add(&mut scene,Box::new(NumberDoc::new(1)),"t").unwrap();docs.try_set_active(a).unwrap();
+    number_doc_mut(&mut docs,a).veto=true;
+    let calls=number_doc(&docs,a).deactivations;
+    let b=docs.add(&mut scene,Box::new(NumberDoc::new(1)),"background").unwrap();
+    assert_eq!(docs.active_id(),a);assert_eq!(number_doc(&docs,a).deactivations,calls);
+    let count=docs.order().len();
+    assert!(docs.add(&mut scene,Box::new(NumberDoc::new(1)),"t").is_err());
+    assert_eq!(docs.order().len(),count);
+    for _ in 0..3 {
+        assert!(docs.try_set_active_tool("background").is_err());
+        docs.set_active_tool("background");assert_eq!(docs.active_id(),a);
+        assert!(docs.try_set_active_tool("empty").is_err());assert_eq!(docs.active_id(),a);
+    }
+    number_doc_mut(&mut docs,a).veto=false;
+    docs.try_set_active_tool("background").unwrap();assert_eq!(docs.active_id(),b);
+    docs.try_set_active_tool("empty").unwrap();assert_eq!(docs.active_id(),0);
+}
+
+#[test]
+fn stand_in_replacement_and_selection_validate_before_mutation() {
+    use wce_editor_core::selection::SelectionOp;
+    let mut scene=RenderScene::default();let mut docs=DocumentManager::default();
+    docs.set_active_tool("weather");
+    let a=docs.add(&mut scene,Box::new(NumberDoc::with_role(1,Role::StandIn)),"weather").unwrap();
+    let b=docs.add(&mut scene,Box::new(NumberDoc::with_role(1,Role::StandIn)),"weather").unwrap();
+    let mut selection=Selection::default();selection.set(SourceRef{doc:a,item:0});let revision=selection.revision();
+    assert!(docs.try_select(&mut selection,SourceRef{doc:b,item:0},SelectionOp::Set).is_err());
+    assert_eq!(docs.active_id(),a);assert_eq!(selection.revision(),revision);
+    number_doc_mut(&mut docs,a).veto=true;
+    let before=(docs.order().len(),scene.layers().len());
+    assert!(docs.add(&mut scene,Box::new(NumberDoc::new(1)),"weather").is_err());
+    assert_eq!((docs.order().len(),scene.layers().len()),before);assert_eq!(docs.active_id(),a);
+    number_doc_mut(&mut docs,a).veto=false;
+    let real=docs.add(&mut scene,Box::new(NumberDoc::new(1)),"weather").unwrap();
+    assert_eq!(docs.active_id(),real);
+    assert!(docs.try_select(&mut selection,SourceRef{doc:a,item:0},SelectionOp::Set).is_err());
+    assert_eq!(selection.revision(),revision);assert_eq!(docs.active_id(),real);
 }
 
 #[test]

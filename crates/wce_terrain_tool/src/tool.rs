@@ -133,6 +133,7 @@ struct Painting {
     doc: DocumentId,
     role: LfRole,
     stroke: LfStroke,
+    campaign: Option<u64>,
     mirror: Option<Arc<LfMirror>>,
     target: f64,
 
@@ -299,6 +300,7 @@ pub struct TerrainTool {
     view: MapView,
     shown: DocumentId,
     building: DocumentId,
+    transition_error: Option<String>,
     cameras: std::collections::HashMap<DocumentId, wce_scene::camera::Camera>,
 
     /// A job on its way (one at a time) and what it is doing.
@@ -327,7 +329,7 @@ pub struct TerrainTool {
 impl Default for TerrainTool {
     fn default() -> Self {
         Self {
-            maps: vec![], map: 0, maps_for: vec![], rings: Rings::default(), overview: true, season: "su".to_owned(), weather: None, map_panel: crate::map_panel::MapPanel::new(), paint: LfPaint::default(), cells: crate::cell_paint::CellPaint::default(), explicit: Default::default(), terry: Default::default(), layout: Default::default(), placements: Default::default(), props: Default::default(), findings: vec![], refill: Default::default(), refill_wanted: false, painting: None, mirror: None, sea_mirror: None, sea_lf: None, ring: (0, 0), pick: None, cursor: None, view: MapView::default(), shown: 0, building: 0, cameras: std::collections::HashMap::new(), rx: None, busy: String::new(), busy_since: None,
+            maps: vec![], map: 0, maps_for: vec![], rings: Rings::default(), overview: true, season: "su".to_owned(), weather: None, map_panel: crate::map_panel::MapPanel::new(), paint: LfPaint::default(), cells: crate::cell_paint::CellPaint::default(), explicit: Default::default(), terry: Default::default(), layout: Default::default(), placements: Default::default(), props: Default::default(), findings: vec![], refill: Default::default(), refill_wanted: false, painting: None, mirror: None, sea_mirror: None, sea_lf: None, ring: (0, 0), pick: None, cursor: None, view: MapView::default(), shown: 0, building: 0, transition_error: None, cameras: std::collections::HashMap::new(), rx: None, busy: String::new(), busy_since: None,
             status: String::new(), packs: None, provider: None, db: None, campaign_db: None, export: None, exported: None, launch_after_export: None, launched: None,
         }
     }
@@ -466,7 +468,7 @@ fn open_map(i: &OpenInputs) -> Result<Loaded, String> {
             // A game without kit maps: the built files are the model (its LF the one shown: a saved copy's edits).
             let model = match &i.built {
                 Some(_) => {
-                    let m = wce_terrain_io::built::read(&i.name, &built_files(i, &folder)?).map_err(|e| e.to_string())?;
+                    let m = wce_terrain_io::built::read_as(&i.name, map_kind(&i.name).0, &built_files(i, &folder)?).map_err(|e| e.to_string())?;
                     if let Some(f) = m.lf(LfRole::Land) {
                         Arc::make_mut(&mut placed).lf = Some(lf_field(f.get()));
                     }
@@ -680,6 +682,7 @@ impl TerrainTool {
     /// A document read: the tool's document in place of the open one (the view follows it). The open one was cleared when the read
     /// started; changes made to it during the read are asked about again.
     fn adopt(&mut self, e: &mut Editor, d: Box<MapDocument>) {
+        if let Err(err) = self.prepare_map_transition(e) { self.refuse_map_transition(e, err); return }
         let mut d = d;
         d.save_dir=save_dir(e,&d);
         if let Err(err)=d.observe_save_destination(){self.status=err;return;}
@@ -722,6 +725,8 @@ impl TerrainTool {
 
     /// Starts making the view's frame of a map document on a worker.
     fn start_view(&mut self, e: &mut Editor, id: DocumentId) {
+        if let Err(err) = self.prepare_map_transition(e) { self.refuse_map_transition(e, err); return }
+        self.transition_error = None;
         let Some(rq) = e.docs.find_as::<MapDocument>(id).and_then(|d| self.request(e, d)) else { return };
         self.building = id;
         let (tx, rx) = channel();
@@ -790,7 +795,31 @@ impl TerrainTool {
     }
 
     /// A view's frame made: the view on the scene, the camera where it was on this map (else over the land nearest its centre).
-    fn show(&mut self, e: &mut Editor, id: DocumentId, s: Box<Streamer>) {
+    fn prepare_map_transition(&mut self, e: &mut Editor) -> Result<(), String> {
+        if self.painting.as_ref().is_some_and(|p| p.campaign.is_some()) {
+            self.end_stroke(e);
+            if self.painting.is_some() {
+                return Err(format!("Cannot switch maps: {}. Restore the campaign height resources, then finish or cancel the stroke and retry", self.status));
+            }
+        }
+        Ok(())
+    }
+
+    fn refuse_map_transition(&mut self, e: &mut Editor, err: String) {
+        self.building = 0;
+        // A worker may finish after activation, or a gesture may start while it is building.
+        // Keep global history and viewport ownership together when the final adoption fails.
+        let err = match e.try_activate_document(self.shown) {
+            Ok(()) => err,
+            Err(restore) => format!("{err}; could not restore the active map: {restore}"),
+        };
+        self.status = err.clone();
+        self.transition_error = Some(err.clone());
+        e.status(&err, true);
+    }
+
+    fn show(&mut self, e: &mut Editor, id: DocumentId, s: Box<Streamer>) -> Result<(), String> {
+        self.prepare_map_transition(e)?;
         if self.shown != 0 {
             self.cameras.insert(self.shown, e.viewport.camera());
         }
@@ -821,6 +850,8 @@ impl TerrainTool {
 
         e.viewport.controller().set_camera(&cam);
         self.view.stream(e, &self.rings);
+        self.transition_error = None;
+        Ok(())
     }
 
     /// A campaign map's weathers: its folder's lighting files (`lighting/`, `environment/`) and `default.environment`.
@@ -925,7 +956,7 @@ impl TerrainTool {
 
             Job::Built(id, s) => {
                 if e.docs.find(id).is_some() && e.docs.of_tool(TERRAIN_TOOL_ID) == Some(id) {
-                    self.show(e, id, s);
+                    if let Err(err) = self.show(e, id, s) { self.refuse_map_transition(e, err); }
                 } else {
                     self.building = 0;
                 }
@@ -935,6 +966,7 @@ impl TerrainTool {
 
     /// Opens a map and waits for its view (scripts).
     fn open_now(&mut self, e: &mut Editor, name: &str) -> Result<String, String> {
+        self.prepare_map_transition(e)?;
         if let Some(message)=self.reuse_open_map(e,name)? { return Ok(message) }
         let again = name.to_owned();
         let retry = Box::new(move |e: &mut Editor| e.with_tool::<Self, _>(|t, e| t.open_now(e, &again)).unwrap_or_else(|| Err("the Terrain tool is busy".to_owned())));
@@ -952,7 +984,7 @@ impl TerrainTool {
         let rq = self.request(e, &d).ok_or("no kit with a tile database")?;
         let id = e.replace_document(TERRAIN_TOOL_ID, d)?;
         let s = Box::new(Streamer::new(rq, e.files()));
-        self.show(e, id, s);
+        self.show(e, id, s)?;
         self.status.clone_from(&summary);
         Ok(summary)
     }
@@ -1128,7 +1160,22 @@ impl TerrainTool {
 
         let mirror = self.target_mirror();
         let target = at.map_or(0.0, |(x, y)| f64::from(field.at((x.round().max(0.0) as u32).min(field.width() - 1), (y.round().max(0.0) as u32).min(field.height() - 1))));
-        self.painting = Some(Painting { doc: self.shown, role, stroke: LfStroke::default(), mirror, target, last: None });
+        let campaign = if d.model().is_some_and(wce_terrain_io::built::campaign_authority::is_built_campaign) {
+            if e.docs.active_id() != self.shown || self.rx.is_some() {
+                e.status("Wait for the requested map view before starting a campaign stroke", true);
+                return false;
+            }
+            if role != LfRole::Land || !matches!(self.paint.op, 0 | 1) {
+                e.status("Built campaign editing currently supports land raise/lower only", true);
+                return false;
+            }
+            let game = e.game().clone();
+            match e.docs.find_as_mut::<MapDocument>(self.shown).expect("checked").begin_campaign_stroke(&game, mirror.clone()) {
+                Ok(s) => Some(s),
+                Err(err) => { e.status(&err, true); return false; }
+            }
+        } else { None };
+        self.painting = Some(Painting { doc: self.shown, role, stroke: LfStroke::default(), campaign, mirror, target, last: None });
         true
     }
 
@@ -1139,10 +1186,20 @@ impl TerrainTool {
         let op = self.op(target);
         let Some(paint) = self.painting.as_mut() else { return };
         let Some(d) = e.docs.find_as_mut::<MapDocument>(paint.doc) else { return };
-        let Some(field) = d.lf_field_mut(paint.role) else { return };
-        let Some(rect) = paint.stroke.dab(field, &b, op) else { return };
+        let rect = if let Some(campaign) = &mut paint.campaign {
+            let LfOp::Raise(amount) = op else { return };
+            match d.campaign_dab(*campaign, &b, amount) {
+                Ok(rect) => rect,
+                Err(err) => { e.status(&err, true); return; }
+            }
+        } else {
+            let Some(field) = d.lf_field_mut(paint.role) else { return };
+            paint.stroke.dab(field, &b, op)
+        };
+        let Some(rect) = rect else { return };
+        let Some(field) = d.lf_field(paint.role) else { return };
         if let Some(m) = &paint.mirror {
-            m.copy(field, rect);
+            if paint.campaign.is_none() { m.copy(field, rect); }
             if paint.role == LfRole::Land
                 && let Some(pick) = self.pick.as_mut()
             {
@@ -1157,6 +1214,9 @@ impl TerrainTool {
     /// What the LF edits (strokes, undo, redo) moved, once no stroke is being painted: the picking there, and the chunks whose objects
     /// stand on it built again.
     fn follow_lf_edits(&mut self, e: &Editor) {
+        if self.painting.as_ref().is_some_and(|p| p.campaign.is_some_and(|ticket| e.docs.find_as::<MapDocument>(p.doc).is_none_or(|d| !d.campaign_stroke_active(ticket)))) {
+            self.painting = None;
+        }
         if self.painting.is_some() {
             return;
         }
@@ -1216,6 +1276,9 @@ impl TerrainTool {
     /// `lf_mask.tif` (the custom-mesh cliffs and the `sea` set, whose masks are all 0; looked for in the kits' order) lays it into the land
     /// LF, one step on the history. No kit map has them applied (Attila's 113: every low sample changes).
     fn apply_lf_patches(&mut self, e: &mut Editor) -> Result<String, String> {
+        if e.docs.find_as::<MapDocument>(self.shown).and_then(|d| d.model()).is_some_and(wce_terrain_io::built::campaign_authority::is_built_campaign) {
+            return Err("Per-tile LF patches are unsupported for built campaign nodal editing".into());
+        }
         let roots = kit_roots(e);
         let mirror = self.mirror.clone();
         let d = e.docs.find_as_mut::<MapDocument>(self.shown).ok_or("no map shown")?;
@@ -1386,6 +1449,16 @@ impl TerrainTool {
 
     /// The stroke onto the document's history.
     fn end_stroke(&mut self, e: &mut Editor) -> Option<usize> {
+        if let Some((doc, campaign)) = self.painting.as_ref().and_then(|p| p.campaign.map(|id| (p.doc, id))) {
+            let Some(d) = e.docs.find_as_mut::<MapDocument>(doc) else { self.painting = None; return None };
+            // Global history/save may already have resolved this ticket. Otherwise retain the
+            // viewport's handle too, so a failed release can be retried after resource recovery.
+            if !d.campaign_stroke_active(campaign) { self.painting = None; return None }
+            return match d.finish_campaign_stroke(campaign) {
+                Ok(bytes) => { self.painting = None; bytes }
+                Err(err) => { self.status = err.clone(); e.status(&err, true); None }
+            };
+        }
         let paint = self.painting.take()?;
         let d = e.docs.find_as_mut::<MapDocument>(paint.doc)?;
         let record = paint.stroke.finish(d.lf_field(paint.role)?)?;
@@ -1610,7 +1683,11 @@ impl TerrainTool {
             gui::text_disabled("This map has no sea LF to paint (no lf_sea_heights.tif).");
         }
 
-        gui::combo("operation", &mut self.paint.op, &LF_OPS);
+        if e.docs.find_as::<MapDocument>(self.shown).and_then(|d| d.model()).is_some_and(wce_terrain_io::built::campaign_authority::is_built_campaign) {
+            self.paint.op = self.paint.op.min(1);
+            gui::combo("operation", &mut self.paint.op, &LF_OPS[..2]);
+            gui::text_disabled("Campaign raise/lower follows the terrain grid. Save retains edits; game export awaits normal-map support.");
+        } else { gui::combo("operation", &mut self.paint.op, &LF_OPS); }
         gui::slider_float("radius (m)", &mut self.paint.radius_m, 20.0, 5000.0, "%.0f");
         match self.paint.op {
             2 | 3 => {
@@ -1947,7 +2024,22 @@ impl Tool for TerrainTool {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
 
+                if let Some(err) = &t.transition_error { return CommandResult::fail(err.clone()) }
                 CommandResult::success(format!("after {:.1} s: shown {}, busy '{}', status '{}'", t0.elapsed().as_secs_f64(), t.shown, t.busy, t.status))
+            })
+        });
+
+        c.add("terrain_assert_owner", "terrain_assert_owner <document id>", "test: active history, shown map and any gesture have the same document owner", |e, a| {
+            let Some(id) = a.first().and_then(|s| s.parse::<DocumentId>().ok()) else { return CommandResult::fail("expected document id") };
+            with_terrain(e, |t, e| {
+                if t.shown != id || e.docs.active_id() != id || t.painting.as_ref().is_some_and(|p| p.doc != id) {
+                    return CommandResult::fail(format!("map ownership differs: active {}, shown {}, gesture {:?}", e.docs.active_id(), t.shown, t.painting.as_ref().map(|p| p.doc)));
+                }
+                let Some(d) = e.docs.find_as::<MapDocument>(id) else { return CommandResult::fail("no map") };
+                let blob = d.model().and_then(wce_terrain_io::built::campaign_authority::state_blob);
+                let bytes = match blob.as_ref().map(|b| b.bytes()).transpose() { Ok(b) => b, Err(err) => return CommandResult::fail(err.to_string()) };
+                let fingerprint = bytes.as_ref().map(|b| b.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)));
+                CommandResult::success(format!("owner {id}; authority fingerprint {fingerprint:?}; gesture {}", t.painting.as_ref().is_some_and(|p| p.campaign.is_some_and(|ticket| d.campaign_stroke_active(ticket)))))
             })
         });
 
@@ -2074,6 +2166,61 @@ impl Tool for TerrainTool {
                 match r {
                     Some(bytes) => CommandResult::success(format!("{} along ({x0}, {y0}) .. ({x1}, {y1}), {events} moves: the record keeps {} KB, the field's sum {sum}", LF_OPS[op], bytes / 1024)),
                     None => CommandResult::fail("the stroke changed nothing"),
+                }
+            })
+        });
+
+        c.add("terrain_campaign_gesture", "terrain_campaign_gesture begin x y radius amount | dab x y [count] | finish | cancel", "test a held campaign brush through the existing tool lifecycle; global undo/redo/save may resolve it", |e, a| {
+            with_terrain(e, |t, e| {
+                let started = std::time::Instant::now();
+                let Some(action) = a.first().map(String::as_str) else { return CommandResult::fail("expected begin/dab/finish/cancel") };
+                if action == "finish" {
+                    if t.painting.as_ref().is_none_or(|p| p.campaign.is_none()) { return CommandResult::fail("no active campaign gesture") }
+                    let active = t.painting.as_ref().is_some_and(|p| e.docs.find_as::<MapDocument>(p.doc).is_some_and(|d| d.campaign_stroke_active(p.campaign.expect("checked"))));
+                    // Exercise the actual viewport release entry point as well as scripted/global commands.
+                    t.viewport_input(e, &wce_editor::tool::ViewportEvent { kind: wce_editor::tool::ViewportEventKind::Release, ..Default::default() });
+                    if !active { return CommandResult::fail("gesture was resolved by a global operation") }
+                    if t.painting.is_some() { return CommandResult::fail("Campaign gesture could not finish; the active stroke is retained for retry") }
+                } else if action == "cancel" {
+                    if t.painting.as_ref().is_none_or(|p| p.campaign.is_none()) { return CommandResult::fail("no active campaign gesture") }
+                    let paint = t.painting.as_ref().expect("checked");
+                    let Some(d) = e.docs.find_as_mut::<MapDocument>(paint.doc) else { return CommandResult::fail("no document") };
+                    if !d.campaign_stroke_active(paint.campaign.expect("checked")) { t.painting = None; return CommandResult::fail("gesture was resolved by a global operation") }
+                    if let Err(err) = d.cancel_campaign_stroke(paint.campaign.expect("checked")) { return CommandResult::fail(err) }
+                    t.painting = None;
+                } else if matches!(action, "begin" | "dab") {
+                    let nums: Vec<f64> = a[1..].iter().filter_map(|v| v.parse().ok()).collect();
+                    let [cx, cy, ..] = nums[..] else { return CommandResult::fail("expected cell x y") };
+                    let Some(d) = e.docs.find_as::<MapDocument>(t.shown) else { return CommandResult::fail("no document") };
+                    if !d.model().is_some_and(wce_terrain_io::built::campaign_authority::is_built_campaign) { return CommandResult::fail("requires a supported built campaign") }
+                    let Some(f) = d.lf_field(LfRole::Land) else { return CommandResult::fail("no LF") };
+                    let (x, y) = (cx * f64::from(f.width()) / f64::from(d.placed.width.max(1)), cy * f64::from(f.height()) / f64::from(d.placed.height.max(1)));
+                    if action == "begin" {
+                        if t.painting.is_some() { return CommandResult::fail("gesture already active") }
+                        let [_, _, radius, amount, ..] = nums[..] else { return CommandResult::fail("expected begin x y radius amount") };
+                        t.paint.on = true; t.paint.sea = false; t.paint.op = 0; t.paint.radius_m = radius as f32; t.paint.amount_m = amount as f32;
+                        if !t.begin_stroke(e, Some((x, y))) { return CommandResult::fail("cannot start gesture") }
+                        t.dab(e, x, y);
+                    } else {
+                        let Some(p) = t.painting.as_ref() else { return CommandResult::fail("no active campaign gesture") };
+                        if p.campaign.is_none_or(|id| !d.campaign_stroke_active(id)) { return CommandResult::fail("gesture was resolved by a global operation") }
+                        let count = nums.get(2).copied().unwrap_or(1.0).clamp(1.0, 32.0) as usize;
+                        for _ in 0..count { t.dab(e, x, y); }
+                    }
+                } else { return CommandResult::fail("expected begin/dab/finish/cancel") }
+                CommandResult::success(format!("campaign gesture {action}: {:.3} ms", started.elapsed().as_secs_f64() * 1000.0))
+            })
+        });
+
+        c.add("terrain_height_check", "terrain_height_check", "validate a retained campaign raise/lower authority and its prepared native heights (does not export)", |e, _| {
+            with_terrain(e, |t, e| {
+                let Some(m) = e.docs.find_as::<MapDocument>(t.shown).and_then(|d| d.model()) else { return CommandResult::fail("no map model") };
+                match wce_terrain_io::built::campaign_authority::prepared(m) {
+                    Ok(p) => {
+                        let sum: u64 = m.lf(LfRole::Land).expect("validated").get().to_vec().iter().map(|&v| u64::from(v)).sum();
+                        CommandResult::success(format!("campaign heights: {} CHMF samples, {} regions, {} full, {} LQ, error {}; preview sum {sum}; normal-dependent export remains guarded", p.stats.chmf_samples, p.stats.chmf_regions, p.stats.full_samples, p.stats.lq_samples, p.stats.full_lq_delta_error))
+                    }
+                    Err(err) => CommandResult::fail(err.to_string()),
                 }
             })
         });

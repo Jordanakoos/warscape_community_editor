@@ -360,3 +360,38 @@ fn preservation_preflight_rejects_invalid_metadata_and_partial_identity_conflict
         assert_eq!((d.history().size(),d.history().position()),(0,0));assert!(!Document::modified(&d));
     }
 }
+
+fn activation_recovery(amount: f64) {
+    use wce_editor_core::document_manager::DocumentManager;
+    for prior in [false,true] { for recover in ["finish","cancel","undo","retry"] {
+        let source=Scratch::new();fixture().write_to(&source.0).unwrap();
+        let mut scene=wce_scene::render_scene::RenderScene::default();let mut docs=DocumentManager::default();
+        let a=docs.add(&mut scene,Box::new(doc(model(&MapFiles::from_dir(&source.0).unwrap()))),"terrain").unwrap();
+        let b=docs.add(&mut scene,Box::new(doc(model(&fixture_with(11000)))),"other-map").unwrap();
+        docs.try_set_active(a).unwrap();let other=raw(docs.find_as::<MapDocument>(b).unwrap());
+        let d=docs.find_as_mut::<MapDocument>(a).unwrap();
+        if prior {complete(d,64.,64.);complete(d,96.,64.);assert!(d.history_mut().undo());}
+        d.history_mut().mark_saved();let saved=raw(d);let pos=d.history().position();let size=d.history().size();
+        let ticket=begin(d,128.,amount);let edited=raw(d);let version=d.history().version();
+        if amount==0.1 {assert_eq!(edited.1,saved.1);assert_ne!(edited.0,saved.0);}
+        let path=source.0.join("lf_height_map.data");let native=std::fs::read(&path).unwrap();std::fs::remove_file(&path).unwrap();
+        for _ in 0..3 {
+            assert!(docs.try_set_active(b).unwrap_err().contains("Cannot switch maps"));docs.set_active_tool("other-map");assert_eq!(docs.active_id(),a);
+            let d=docs.find_as::<MapDocument>(a).unwrap();assert_eq!(raw(d),edited);assert!(d.campaign_stroke_active(ticket));assert!(Document::modified(d));
+            assert_eq!((d.history().size(),d.history().position(),d.history().version()),(size,pos,version));assert_eq!(raw(docs.find_as::<MapDocument>(b).unwrap()),other);
+        }
+        std::fs::write(path,native).unwrap();
+        if recover=="retry" {docs.try_set_active(b).unwrap();assert_eq!(docs.active_id(),b);} else {
+            let d=docs.find_as_mut::<MapDocument>(a).unwrap();
+            match recover {"finish"=>{d.finish_campaign_stroke(ticket).unwrap();},"cancel"=>d.cancel_campaign_stroke(ticket).unwrap(),_=>{assert!(d.history_mut().undo());}}
+        }
+        let d=docs.find_as::<MapDocument>(a).unwrap();assert!(!d.campaign_stroke_active(ticket));
+        if matches!(recover,"cancel"|"undo") {assert_eq!(raw(d),saved);assert!(!Document::modified(d));}else{assert_eq!(raw(d),edited);assert!(Document::modified(d));}
+        docs.try_set_active(b).unwrap();assert_eq!(raw(docs.find_as::<MapDocument>(b).unwrap()),other);
+        assert!(docs.find_as_mut::<MapDocument>(b).unwrap().campaign_dab(ticket,&brush(128.,128.,3.),amount).is_err());
+        docs.try_set_active(a).unwrap();let d=docs.find_as_mut::<MapDocument>(a).unwrap();
+        assert!(d.campaign_dab(ticket,&brush(128.,128.,3.),amount).is_err());let fresh=begin(d,160.,0.1);d.cancel_campaign_stroke(fresh).unwrap();assert_valid(d);
+    } }
+}
+#[test] fn fractional_map_activation_refuses_and_recovers_exactly() {activation_recovery(0.1);}
+#[test] fn quantized_map_activation_refuses_and_recovers_exactly() {activation_recovery(64.);}
