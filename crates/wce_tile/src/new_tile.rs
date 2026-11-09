@@ -423,4 +423,13 @@ mod tests {
         assert!((back.height_at(-128.0 + 90.0 * 4.0, -128.0 + 40.0 * 4.0) - -5.0).abs() < 0.01);
         assert!((back.height_at(200.0, 100.0) - 10.0).abs() < 0.01, "{}", back.height_at(200.0, 100.0));
     }
+    #[test]fn step_c_new_variation_stays_in_the_staged_database_entry(){
+        use wce_foundation::publication::{Output,Source};
+        let tmp=tempfile::tempdir().unwrap();let raw=tmp.path().join("assembly_kit/raw_data");let t=tile("stage_variation");let dir=create(&t,&raw,None).unwrap();let mut p=crate::tile_project::TileProject::open(&dir).unwrap();
+        let path=t.entry_file(&raw);let mut entry=p.entry.as_ref().unwrap().clone();let text=entry.variation_text(0).unwrap();entry.set_variations(&[(text.clone(),None),(text,Some("added".into()))]).unwrap();
+        p.entry=Some(entry.clone());p.variation=Some(1);p.info.variation="added".into();let output=dir.parent().unwrap().join("added");
+        p.save_with_extra(&output,true,true,vec![Output::new(path.clone(),Source::Bytes(entry.save().into()))]).unwrap();
+        let saved=wce_formats::tile_entry::TileEntry::load(&path).unwrap();assert_eq!(saved.variations().len(),2);assert!(saved.find_variation("added").is_some());assert!(output.join("tile.wce").is_file());
+    }
+
 }

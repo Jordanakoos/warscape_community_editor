@@ -516,138 +516,57 @@ impl TileProject {
         crate::river_files::rivers(&self.scene).into_iter().map(|r| self.scene.element_text(r)).collect()
     }
 
-    pub fn save(&mut self, out_dir: &Path, force_scene: bool, force_height: bool) -> Result<(bool, String)> {
-        let mut msg = String::new();
-        let mut wrote = false;
-        let elsewhere = out_dir != self.dir;
+    pub fn save(&mut self,out_dir:&Path,force_scene:bool,force_height:bool)->Result<(bool,String)>{self.save_with_extra(out_dir,force_scene,force_height,vec![])}
 
-        // Into another folder (the first save of a kit's tile into the projects, "Save as"): the tile's other files go with it.
-        if elsewhere {
-            std::fs::create_dir_all(out_dir).map_err(|error| error.to_string())?;
-            let copied = self.copy_other_files(out_dir)?;
-            if copied != 0 {
-                msg += &format!("{copied} other file(s) copied. ");
+    /// Include the first project's database copy in the same preparation/publication batch.
+    pub fn save_with_extra(&mut self, out_dir: &Path, force_scene: bool, force_height: bool,mut outputs:Vec<wce_foundation::publication::Output>) -> Result<(bool, String)> {
+        use wce_foundation::publication::{Output,Source,Staged,resource_path};
+        let elsewhere=out_dir!=self.dir;let mut msg=String::new();
+        let mut notes=None;let mut saved_height=None;let mut range=None;
+        if elsewhere {let copied=self.copy_other_files(out_dir,&mut outputs)?;if copied!=0{msg+=&format!("{copied} other file(s) copied. ");}}
+        let mut write=|name:&str,bytes:&[u8],backup:bool|->Result<()>{
+            let target=resource_path(out_dir,name)?;
+            if backup && target.is_file() && !out_dir.join(format!("{name}.bak")).exists() && std::fs::read(&target).map_err(|e|e.to_string())?!=bytes {
+                outputs.push(Output::new(out_dir.join(format!("{name}.bak")),Source::File(target.clone())));
             }
-        }
-
-        let write = |name: &str, bytes: &[u8]| -> Result<()> {
-            let target = out_dir.join(name);
-            let bak = out_dir.join(format!("{name}.bak"));
-            if target.exists() && !bak.exists() {
-                std::fs::copy(&target, &bak).map_err(|error| error.to_string())?;
-            }
-
-            std::fs::write(&target, bytes).map_err(|_| format!("could not write {}", target.display()))
+            outputs.push(Output::new(target,Source::Bytes(std::sync::Arc::from(bytes))));Ok(())
         };
-
-        std::fs::create_dir_all(out_dir).map_err(|error| error.to_string())?;
         if self.scene.modified() || force_scene || elsewhere || !out_dir.join(WCE_FILE).exists() {
-            let base = self.prefab_base.clone();
-            let (text, kept) = strip_prefab_contents_with(self.scene.save(), base.as_ref().map(|b| &*b.0 as crate::project_files::PrefabContents<'_>));
-            write(WCE_FILE, &mark_wce_text(text))?;
-            msg += &format!("{WCE_FILE} saved. ");
-            if !kept.is_empty() {
-                msg += &format!("{} prefab reference(s) differ from their prefab by more than values: they keep their own contents ({}). ", kept.len(), kept.join("; "));
-            }
-
-            self.prefab_notes = kept;
-            wrote = true;
+            let base=self.prefab_base.clone();
+            let(text,kept)=strip_prefab_contents_with(self.scene.save(),base.as_ref().map(|b|&*b.0 as crate::project_files::PrefabContents<'_>));
+            write(WCE_FILE,&mark_wce_text(text),true)?;msg+=&format!("{WCE_FILE} saved. ");
+            if !kept.is_empty(){msg+=&format!("{} prefab reference(s) keep their own contents ({}). ",kept.len(),kept.join("; "));}notes=Some(kept);
         }
-
-        // The rivers' files (TEd writes them next to tile.ted; BOB reads them): only when a river changed, so that an old river keeps the
-        // file TEd left (see `river_files`). The files past the last river become empty: BOB reads up to the first missing one.
-        // Saved elsewhere ("Save as"): every river's file, with the factors of the tile's own files.
-        let rivers = self.current_river_texts();
-        if rivers != self.river_texts || elsewhere {
-            let campaign = self.entry.as_ref().is_some_and(|e| e.kind() == "campaign") || self.dir.to_string_lossy().replace('\\', "/").contains("/tiles/campaign/");
-            let files = crate::river_files::river_files(&self.scene, Some(&self.dir), campaign);
-            for (n, (name, text)) in files.iter().enumerate() {
-                let changed = elsewhere || self.river_texts.get(n) != rivers.get(n);
-                if changed || !out_dir.join(name).exists() {
-                    std::fs::write(out_dir.join(name), text).map_err(|_| format!("could not write {}", out_dir.join(name).display()))?;
-                }
-            }
-
-            let mut n = files.len();
-            while out_dir.join(format!("river_spline{n}.xml")).exists() {
-                std::fs::write(out_dir.join(format!("river_spline{n}.xml")), b"<SEGMENTED_SPLINE/>\r\n").map_err(|e| e.to_string())?;
-                n += 1;
-            }
-
-            msg += &format!("river_spline*.xml saved ({} river{}). ", files.len(), if files.len() == 1 { "" } else { "s" });
-            wrote = true;
+        let rivers=self.current_river_texts();
+        if rivers!=self.river_texts || elsewhere {
+            let campaign=self.entry.as_ref().is_some_and(|e|e.kind()=="campaign") || self.dir.to_string_lossy().replace('\\',"/").contains("/tiles/campaign/");
+            let files=crate::river_files::river_files(&self.scene,Some(&self.dir),campaign);
+            for(n,(name,text))in files.iter().enumerate(){if elsewhere || self.river_texts.get(n)!=rivers.get(n)||!out_dir.join(name).exists(){write(name,text,false)?;}}
+            let mut n=files.len();while out_dir.join(format!("river_spline{n}.xml")).exists(){write(&format!("river_spline{n}.xml"),b"<SEGMENTED_SPLINE/>\r\n",false)?;n+=1;}
+            msg+=&format!("river_spline*.xml saved ({} river(s)). ",files.len());
         }
-
-        if let (Some(field), Some(base)) = (&mut self.height, &self.height_png)
-            && (self.height_dirty || force_height || (elsewhere && !out_dir.join("height_map_0.png").exists()))
-        {
-            // The range follows the heights, as TEd saves them; the entry gets it.
-            let (min, scale) = field.fit_range();
-            if (min, scale) != (field.min_height(), field.scale()) {
-                msg += &format!("height range {:.3} .. {:.3} (was {:.3} .. {:.3}). ", min, min + scale, field.min_height(), field.min_height() + field.scale());
-                field.set_range(min, scale);
-            }
-
-            let png = field.to_png(base);
-            let bytes = if png.has_ancillary { png.encode() } else { png.write() }.map_err(|error| error.to_string())?;
-            write("height_map_0.png", &bytes)?;
-            msg += if png.has_ancillary { "height_map_0.png saved (source had extra chunks: re-encoded). " } else { "height_map_0.png saved. " };
-            wrote = true;
-            msg += &self.save_height_range(out_dir, min, scale)?;
+        if let(Some(field),Some(base))=(&self.height,&self.height_png)
+            && (self.height_dirty||force_height||(elsewhere&&!out_dir.join("height_map_0.png").exists())) {
+            let mut field=field.clone();let(min,scale)=field.fit_range();if (min,scale)!=(field.min_height(),field.scale()){msg+=&format!("height range {min:.3} .. {:.3} (was {:.3} .. {:.3}). ",min+scale,field.min_height(),field.min_height()+field.scale());}field.set_range(min,scale);
+            let png=field.to_png(base);let bytes=if png.has_ancillary{png.encode()}else{png.write()}.map_err(|e|e.to_string())?;
+            write("height_map_0.png",&bytes,true)?;msg+="height_map_0.png saved. ";range=Some((min,scale));saved_height=Some(field);
         }
-
-        for part in [self.save_texture_groups(out_dir)?, self.save_links(out_dir)?, self.save_properties(out_dir)?] {
-            wrote |= !part.is_empty();
-            msg += &part;
-        }
-        if let Some(blend) = &self.blend
-            && (self.blend_dirty || elsewhere)
-        {
-            let target = out_dir.join("blend_map.tif");
-            let bak = out_dir.join("blend_map.tif.bak");
-            if target.exists() && !bak.exists() {
-                std::fs::copy(&target, &bak).map_err(|error| error.to_string())?;
-            }
-
-            blend.write(&target)?;
-            msg += "blend_map.tif saved. ";
-            wrote = true;
-        }
-
-        if let Some(ground) = &self.ground
-            && (self.ground_dirty || elsewhere)
-        {
-            let target = out_dir.join(&self.ground_file);
-            let bak = out_dir.join(format!("{}.bak", self.ground_file));
-            if target.exists() && !bak.exists() {
-                std::fs::copy(&target, &bak).map_err(|error| error.to_string())?;
-            }
-
-            std::fs::write(&target, ground.to_bytes()?).map_err(|_| format!("could not write {}", target.display()))?;
-            msg += &format!("{} saved. ", self.ground_file);
-            wrote = true;
-        }
-
-        // A kit save goes by the maps above, which hold the composite: TEd gets the terrain, the layers stay here.
-        let layers_file = out_dir.join(crate::terrain_layers::FILE);
-        match &mut self.layers {
-            Some(layers) if !layers.is_empty() && (layers.dirty || elsewhere) => {
-                std::fs::write(&layers_file, layers.to_bytes()?).map_err(|_| format!("could not write {}", layers_file.display()))?;
-                layers.dirty = false;
-                msg += "terrain layers saved. ";
-                wrote = true;
-            }
-
-            Some(layers) if layers.is_empty() && layers_file.exists() => {
-                std::fs::remove_file(&layers_file).map_err(|_| format!("could not remove {}", layers_file.display()))?;
-                layers.dirty = false;
-                wrote = true;
-            }
-
-            _ => {}
-        }
-
-        Ok((wrote, if wrote { msg } else { "nothing to save".to_owned() }))
+        if let Some(blend)=&self.blend && (self.blend_dirty||elsewhere){write("blend_map.tif",&blend.to_bytes(),true)?;msg+="blend_map.tif saved. ";}
+        if let Some(ground)=&self.ground && (self.ground_dirty||elsewhere){write(&self.ground_file,&ground.to_bytes()?,true)?;msg+=&format!("{} saved. ",self.ground_file);}
+        if let Some(layers)=&self.layers && !layers.is_empty() && (layers.dirty||elsewhere){write(crate::terrain_layers::FILE,&layers.to_bytes()?,false)?;msg+="terrain layers saved. ";}
+        let remove_layers=self.layers.as_ref().is_some_and(|l|l.is_empty())&&out_dir.join(crate::terrain_layers::FILE).exists();
+        if remove_layers{outputs.push(Output::new(out_dir.join(crate::terrain_layers::FILE),Source::Remove));msg+="empty terrain layers removed. ";}
+        let entry_base=self.entry_file_for(out_dir).and_then(|p|outputs.iter().find(|o|o.path==p).map(|o|&o.source));
+        if let Some((target,bytes))=self.prepare_entry(out_dir,range,entry_base)?{outputs.retain(|o|o.path!=target);msg+=&format!("{} saved. ",target.file_name().unwrap_or_default().to_string_lossy());let mut entry=Output::new(target,Source::Bytes(bytes.into()));entry.priority=4;outputs.push(entry);}
+        let wrote=!outputs.is_empty();
+        Staged::prepare(outputs).and_then(Staged::publish).map_err(|e|e.to_string())?;
+        // Generation/staging failures never change the model's ranges, notes or dirty flags.
+        if let Some(notes)=notes{self.prefab_notes=notes;}
+        if let Some(height)=saved_height{self.height=Some(height);}
+        if let Some((min,scale))=range{self.info.min_height=min;self.info.scale=scale;if let(Some(entry),Some(v))=(&mut self.entry,self.variation){entry.set_height_range(v,min,scale);}}
+        if let Some(layers)=&mut self.layers{layers.dirty=false;}
+        TileIndex::forget_shared();
+        Ok((wrote,if wrote{msg}else{"nothing to save".into()}))
     }
 
     /// The ground type map's file name in the variation folder: `ground_type_map.png` in any case (BOB's own tiles have
@@ -704,109 +623,21 @@ impl TileProject {
         Some(kit_raw_root(out_dir)?.join(relative))
     }
 
-    /// The variation's height range into the entry, and the entry file next to a tile saved into `out_dir` when its text differs; the
-    /// message says what was written.
-    fn save_height_range(&mut self, out_dir: &Path, min: f64, scale: f64) -> Result<String> {
-        self.info.min_height = min;
-        self.info.scale = scale;
-        let target = self.entry_file_for(out_dir);
-        let (Some(entry), Some(v)) = (self.entry.as_mut(), self.variation) else { return Ok(String::new()) };
-        entry.set_height_range(v, min, scale);
-        let Some(target) = target else {
-            return Ok("the tile database entry is not next to it: its height range is not saved. ".to_owned());
+    /// Merge this tile's editable fields into one database output, keeping other variations.
+    fn prepare_entry(&self,out_dir:&Path,range:Option<(f64,f64)>,base:Option<&wce_foundation::publication::Source>)->Result<Option<(PathBuf,Vec<u8>)>> {
+        let(Some(entry),Some(target))=(&self.entry,self.entry_file_for(out_dir))else{return Ok(None)};
+        let mut there=match base{
+            Some(wce_foundation::publication::Source::Bytes(b))=>TileEntry::parse(b.to_vec()).map_err(|e|e.to_string())?,
+            Some(wce_foundation::publication::Source::File(p))=>TileEntry::load(p).map_err(|e|e.to_string())?,
+            Some(wce_foundation::publication::Source::Remove)=>return Err("cannot remove a tile database entry during Save".into()),
+            None=>if target.is_file(){TileEntry::load(&target).map_err(|e|e.to_string())?}else{entry.clone()},
         };
-
-        // Only this variation's numbers change in the file there: the others are the ones their own saves wrote.
-        let mut there = if target.is_file() { TileEntry::load(&target).map_err(|error| error.to_string())? } else { entry.clone() };
-        let name = entry.variations().get(v).map(|x| x.location.clone()).unwrap_or_default();
-        there.set_height_range(there.find_variation(&name).unwrap_or(v), min, scale);
-        let bytes = there.save();
-        if std::fs::read(&target).is_ok_and(|old| old == bytes) {
-            return Ok(String::new());
-        }
-
-        if let Some(dir) = target.parent() {
-            std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-        }
-
-        std::fs::write(&target, &bytes).map_err(|_| format!("could not write {}", target.display()))?;
-        TileIndex::forget_shared();
-        Ok(format!("{} saved. ", target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
-    }
-
-    /// The entry's texture groups into the entry file next to a tile saved into `out_dir`, when they differ there; the message says what
-    /// was written.
-    fn save_texture_groups(&mut self, out_dir: &Path) -> Result<String> {
-        let (Some(entry), Some(target)) = (self.entry.as_ref(), self.entry_file_for(out_dir)) else { return Ok(String::new()) };
-        if !target.is_file() {
-            return Ok(String::new());
-        }
-
-        let mut there = TileEntry::load(&target).map_err(|error| error.to_string())?;
-        let groups = entry.texture_group();
-        let mut changed = false;
-        for (slot, name) in [&groups.red, &groups.green, &groups.blue, &groups.alpha].into_iter().enumerate() {
-            changed |= there.set_texture_group(slot, name);
-        }
-
-        if !changed {
-            return Ok(String::new());
-        }
-
-        std::fs::write(&target, there.save()).map_err(|_| format!("could not write {}", target.display()))?;
-        TileIndex::forget_shared();
-        Ok(format!("{} saved (texture groups). ", target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
-    }
-
-    /// The tile properties the editor edits (`TileDocument::set_entry_attr`: the colour, the mask, the flags, the variation's normal
-    /// strength) into the entry file next to a tile saved into `out_dir`, when they differ there; the message says what was written.
-    fn save_properties(&mut self, out_dir: &Path) -> Result<String> {
-        const TILE_ATTRS: [&str; 8] = ["red", "green", "blue", "mask", "requires_infield_lodding", "random_rotatable", "scalable", "encampable"];
-        let (Some(entry), Some(target)) = (self.entry.as_ref(), self.entry_file_for(out_dir)) else { return Ok(String::new()) };
-        if !target.is_file() {
-            return Ok(String::new());
-        }
-
-        let mut there = TileEntry::load(&target).map_err(|error| error.to_string())?;
-        let mut changed = false;
-        for a in TILE_ATTRS {
-            if let Some(v) = entry.tile_attr(a) {
-                changed |= there.set_tile_attr(a, &v);
-            }
-        }
-
-        if let Some(v) = self.variation {
-            let name = entry.variations().get(v).map(|x| x.location.clone()).unwrap_or_default();
-            if let (Some(i), Some(ns)) = (there.find_variation(&name), entry.variation_attr(v, "normal_strength")) {
-                changed |= there.set_variation_attr(i, "normal_strength", &ns);
-            }
-        }
-
-        if !changed {
-            return Ok(String::new());
-        }
-
-        std::fs::write(&target, there.save()).map_err(|_| format!("could not write {}", target.display()))?;
-        TileIndex::forget_shared();
-        Ok(format!("{} saved (tile properties). ", target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
-    }
-
-    /// The entry's links (Tile links) into the entry file next to a tile saved into `out_dir`, when they differ there; the message says what
-    /// was written.
-    fn save_links(&mut self, out_dir: &Path) -> Result<String> {
-        let (Some(entry), Some(target)) = (self.entry.as_ref(), self.entry_file_for(out_dir)) else { return Ok(String::new()) };
-        if !target.is_file() {
-            return Ok(String::new());
-        }
-
-        let mut there = TileEntry::load(&target).map_err(|error| error.to_string())?;
-        if !there.set_links(&entry.link_targets(), &entry.links()).map_err(|error| error.to_string())? {
-            return Ok(String::new());
-        }
-
-        std::fs::write(&target, there.save()).map_err(|_| format!("could not write {}", target.display()))?;
-        TileIndex::forget_shared();
-        Ok(format!("{} saved (links). ", target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
+        if let(Some((min,scale)),Some(v))=(range,self.variation){let name=entry.variations().get(v).map(|x|x.location.clone()).unwrap_or_default();there.set_height_range(there.find_variation(&name).unwrap_or(v),min,scale);}
+        let groups=entry.texture_group();for(slot,name)in[&groups.red,&groups.green,&groups.blue,&groups.alpha].into_iter().enumerate(){there.set_texture_group(slot,name);}
+        there.set_links(&entry.link_targets(),&entry.links()).map_err(|e|e.to_string())?;
+        for attr in ["red","green","blue","mask","requires_infield_lodding","random_rotatable","scalable","encampable"]{if let Some(v)=entry.tile_attr(attr){there.set_tile_attr(attr,&v);}}
+        if let Some(v)=self.variation{let name=entry.variations().get(v).map(|x|x.location.clone()).unwrap_or_default();if let(Some(i),Some(ns))=(there.find_variation(&name),entry.variation_attr(v,"normal_strength")){there.set_variation_attr(i,"normal_strength",&ns);}}
+        let bytes=there.save();if std::fs::read(&target).is_ok_and(|old|old==bytes){return Ok(None)}Ok(Some((target,bytes)))
     }
 
     /// Fills in the prefab references' contents from their prefabs (`contents`: a key's group contents; `PrefabLibrary::contents`), as the
@@ -859,20 +690,14 @@ impl TileProject {
     /// # Errors
     ///
     /// A file can't be copied.
-    fn copy_other_files(&self, out_dir: &Path) -> Result<usize> {
-        let Ok(read) = std::fs::read_dir(&self.dir) else { return Ok(0) };
-        let mut n = 0;
-        for entry in read.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let skip = name == TED_FILE || name == WCE_FILE || name == crate::terrain_layers::FILE || name == "height_map_0.png" || (name == "blend_map.tif" && self.blend.is_some())
-                || (name.eq_ignore_ascii_case("ground_type_map.png") && self.ground.is_some()) || name.ends_with(".bak") || !entry.path().is_file();
-            if !skip {
-                std::fs::copy(entry.path(), out_dir.join(&name)).map_err(|error| format!("{}: {error}", entry.path().display()))?;
-                n += 1;
-            }
-        }
-
-        Ok(n)
+    fn copy_other_files(&self,out_dir:&Path,outputs:&mut Vec<wce_foundation::publication::Output>)->Result<usize>{
+        use wce_foundation::publication::{Output,Source,resource_path,reserved};
+        let mut count=0;
+        for entry in std::fs::read_dir(&self.dir).map_err(|e|e.to_string())?{
+            let entry=entry.map_err(|e|e.to_string())?;let name=entry.file_name().to_string_lossy().into_owned();
+            let skip=reserved(&name)||name==TED_FILE||name==WCE_FILE||name==crate::terrain_layers::FILE||name=="height_map_0.png"||name.starts_with("river_spline")||(name=="blend_map.tif"&&self.blend.is_some())||(name.eq_ignore_ascii_case("ground_type_map.png")&&self.ground.is_some())||name.ends_with(".bak")||!entry.path().is_file();
+            if !skip{outputs.push(Output::new(resource_path(out_dir,&name)?,Source::File(entry.path())));count+=1;}
+        }Ok(count)
     }
 
     /// "Save for Assembly Kit": the tile as TEd reads it in `kit_dir` (a variation folder of the kit): tile.ted (the conversion's polyfills
@@ -984,22 +809,14 @@ impl TileProject {
         Ok(out)
     }
 
-    pub fn save_for_kit_scene(&self, kit_dir: &Path, scene: Vec<u8>, polyfilled: Vec<String>, maps: &[(String, Vec<u8>)]) -> Result<(String, TedReport)> {
-        std::fs::create_dir_all(kit_dir).map_err(|error| format!("{}: {error}", kit_dir.display()))?;
-        // A file the kit has the same bytes of is left alone; one it has otherwise keeps a `.bak`.
-        let write = |name: &str, bytes: &[u8]| -> Result<bool> {
-            let target = kit_dir.join(name);
-            match std::fs::read(&target) {
-                Ok(old) if old == bytes => return Ok(false),
-                Ok(_) => {
-                    std::fs::copy(&target, kit_dir.join(format!("{name}.bak"))).map_err(|error| error.to_string())?;
-                }
+    pub fn save_for_kit_scene(&self,kit_dir:&Path,scene:Vec<u8>,polyfilled:Vec<String>,maps:&[(String,Vec<u8>)])->Result<(String,TedReport)>{self.save_for_kit_scene_with_extra(kit_dir,scene,polyfilled,maps,vec![])}
 
-                Err(_) => {}
-            }
-
-            std::fs::write(&target, bytes).map_err(|_| format!("could not write {}", target.display()))?;
-            Ok(true)
+    pub fn save_for_kit_scene_with_extra(&self, kit_dir: &Path, scene: Vec<u8>, polyfilled: Vec<String>, maps: &[(String, Vec<u8>)],mut outputs:Vec<wce_foundation::publication::Output>) -> Result<(String, TedReport)> {
+        use wce_foundation::publication::{Output,Source,Staged,resource_path,reserved};
+        let mut write=|name:&str,bytes:&[u8]|->Result<bool>{
+            let target=resource_path(kit_dir,name)?;
+            if let Ok(old)=std::fs::read(&target){if old==bytes{return Ok(false)}outputs.push(Output::new(kit_dir.join(format!("{name}.bak")),Source::File(target.clone())));}
+            outputs.push(Output::new(target,Source::Bytes(std::sync::Arc::from(bytes))));Ok(true)
         };
 
         let (ted, mut report) = crate::project_files::to_ted(scene)?;
@@ -1050,7 +867,7 @@ impl TileProject {
         if let Ok(read) = std::fs::read_dir(&self.dir) {
             for entry in read.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                let ours = name == TED_FILE || name == WCE_FILE || name == crate::terrain_layers::FILE || name == "height_map_0.png" || (name == "blend_map.tif" && self.blend.is_some())
+                let ours = reserved(&name) || name == TED_FILE || name == WCE_FILE || name == crate::terrain_layers::FILE || name == "height_map_0.png" || (name == "blend_map.tif" && self.blend.is_some())
                     || (name.eq_ignore_ascii_case("ground_type_map.png") && self.ground.is_some()) || name.starts_with("river_spline") || name.ends_with(".bak");
                 if !ours && entry.path().is_file() && write(&name, &std::fs::read(entry.path()).map_err(|error| error.to_string())?)? {
                     others += 1;
@@ -1058,6 +875,7 @@ impl TileProject {
             }
         }
 
+        Staged::prepare(outputs).and_then(Staged::publish).map_err(|e|e.to_string())?;
         Ok((format!("saved for the Assembly Kit in {} ({TED_FILE}, {} river file(s), {others} other file(s) changed); {}", kit_dir.display(), files.len(), report.summary()), report))
     }
 

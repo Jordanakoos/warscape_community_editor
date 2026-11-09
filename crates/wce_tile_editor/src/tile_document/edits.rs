@@ -2656,12 +2656,13 @@ impl TileDocument {
 
     /// Saves tile.wce and the height map (in place, or into the folder of `target`); the message says what was written. A tile opened
     /// from a kit is saved into its project (kit.rs), which the document is from then on.
-    pub(crate) fn save_tile(&mut self, target: &SaveTarget) -> Result<String, String> {
+    pub(crate) fn save_tile(&mut self,target:&SaveTarget)->Result<String,String>{self.save_tile_with_extra(target,vec![])}
+    pub(crate) fn save_tile_with_extra(&mut self, target: &SaveTarget,mut extra:Vec<wce_foundation::publication::Output>) -> Result<String, String> {
         self.end_stroke();
         let mut elsewhere = !target.path.as_os_str().is_empty();
         let mut into_project = None;
         if !elsewhere && !self.is_project() {
-            into_project = Some(self.make_project()?);
+            let (dir,outputs)=self.make_project()?;into_project=Some(dir);extra.extend(outputs);
             elsewhere = true;
         }
 
@@ -2681,10 +2682,13 @@ impl TileDocument {
         let blend_dirty = t.project.blend_dirty || t.blend_modified() || t.blend_on_disk_edited;
         let ground_dirty = t.project.ground_dirty || t.ground_modified() || t.ground_on_disk_edited;
         let t = self.tile_mut();
+        let old_dirty=(t.project.height_dirty,t.project.blend_dirty,t.project.ground_dirty);
         t.project.height_dirty = height_dirty;
         t.project.blend_dirty = blend_dirty;
         t.project.ground_dirty = ground_dirty;
-        let (wrote, msg) = t.project.save(&out, force_scene, false)?;
+        let result=t.project.save_with_extra(&out,force_scene,false,extra);
+        if result.is_err(){(t.project.height_dirty,t.project.blend_dirty,t.project.ground_dirty)=old_dirty;}
+        let (wrote,msg)=result?;
         if let Some(dir) = into_project {
             self.moved_to_project(dir);
             elsewhere = false;
