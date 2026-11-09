@@ -207,6 +207,9 @@ fn single_byte_name(byte:u8)->Vec<u8>{let mut b=b"BLMF".to_vec();for n in [7u32,
     let f=files(fixture([123,-7]));let mut d=doc(model(&f));widen(&mut d);reject_save(&mut d,"r01-reject");assert!(d.history_mut().undo());assert!(!d.modified());let path=scratch("r01-retry").join("save");save(&mut d,&path).unwrap();assert_eq!(tree(&path),materialize(&f));
 }
 #[test]fn p004_r02_bad_id_explicit_failure(){let mut b=fixture([0,0]);b.types[0].1[0].id=0xffff0001u32 as i32;assert!(built::read("bad-id",&files(b)).is_err());}
+#[test]fn p004_r03_campaign_guard_retained(){
+    let mut f=files(fixture([0,0]));let mut dds=vec![0u8;128];dds[..4].copy_from_slice(b"DDS ");dds[12..16].copy_from_slice(&1u32.to_le_bytes());dds[16..20].copy_from_slice(&1u32.to_le_bytes());dds.extend(10u16.to_le_bytes());f.folder.insert("lf_height_map.dds".into(),blob(dds));let mut m=built::read_as("campaign",MapKind::Campaign,&f).unwrap();m.lf_mut(LfRole::Land).unwrap().edit().set(0,0,11);assert!(built::write(&m,None).is_err());
+}
 #[test]fn p004_r04_unrepresented_inspector_change(){
     let mut d=doc(model(&files(fixture([0,0]))));let id=d.project().unwrap().entities[0].id;
     attr(&mut d,id,"ECLandscapeAbove","active","false".into());reject_save(&mut d,"r04");

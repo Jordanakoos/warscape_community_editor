@@ -49,6 +49,19 @@ fn writer_independently_rejects_bypassed_insertions_and_all_removal_positions() 
 }
 
 #[test]
+fn campaign_project_route_retains_original_v9_placement_protection() {
+    let input=files(9,paired_tail());let mut model=read("test",&input).unwrap();
+    model.tile_list.as_mut().unwrap().edit().placements.remove(1);
+    let before=model.tile_list.as_ref().unwrap().get().write();
+    assert!(campaign_authority::project_files(&model,None).unwrap_err().to_string().contains(LIST));
+    assert_eq!(model.tile_list.as_ref().unwrap().get().write(),before);
+    model.tile_list.as_mut().unwrap().edit().version=8;
+    let before=model.tile_list.as_ref().unwrap().get().write();
+    assert!(campaign_authority::project_files(&model,None).unwrap_err().to_string().contains(LIST));
+    assert_eq!(model.tile_list.as_ref().unwrap().get().write(),before);
+}
+
+#[test]
 fn writer_rejects_changed_unknown_or_malformed_metadata() {
     for tail in [vec![7, 8, 9], vec![4, 0, 0, 0, 1, 0, 0, 0]] {
         let files = files(9, tail);

@@ -1,10 +1,20 @@
-# Built campaign forward height preparation
+# Built campaign height preservation
 
-`built::campaign_heights` prepares explicit forward height deltas from stored campaign
-CHMF/full/LQ baselines without modifying its inputs. The API returns three height resources
-for inspection and validation. Campaign-normal generation, authoring-state persistence,
-native publication and interactive editing are separate responsibilities. Existing built
-reader/writer routing and behavior remain unchanged.
+Complete built campaign height export is currently **unsupported**. Explicit forward height
+deltas can be prepared and independently validated through `built::campaign_heights`.
+Campaign-normal regeneration remains unresolved. The built reader takes the
+map kind from its caller's existing folder routing (`built::read_as`) and also recognizes the
+native tile-list `is_campaign` flag. The former matters when a campaign folder has no tile list.
+No map name is hardcoded. Unedited resources roundtrip as their original blobs.
+
+Pack export uses `built::write`. It rejects effective native height changes on
+campaigns before returning an output file set. Project save uses `campaign_authority::project_files`:
+supported raise/lower deltas are retained with unchanged native baselines, as described in
+`campaign_height_authority.md`. LQ/campaign-normal companion markers also
+protect incomplete folders opened without their classification. Taking a mutable reference
+or undoing a stroke does not count as an effective height change: dimensions and original
+DDS samples are compared, and the entire original blob is retained. Other edits can still be
+written when heights are unchanged. Battle and raw-kit height paths are unchanged.
 
 ## Why the battle writer cannot be reused
 
@@ -57,17 +67,27 @@ witnessed legacy operation. `prepare_delta` works from the stored CHMF/full/LQ b
   Other edited profiles and unsupported edge fields are refused. Quantized no-op fields
   keep original blobs without decoding unknown data.
 
-Prior validation compared all three complete resources against independently audited
-native outputs. Two archived Rome witnesses reproduced byte for byte:
+The `campaign_height_delta_check` example compares all three complete resources against
+independently audited native outputs. Two archived Rome witnesses reproduce byte for byte:
 Phase5B-2:535 CHMF samples/seven regions,9,685 full/2,438 LQ pixels; Phase5C-3C:
 98 samples/two regions,1,967 full/492 LQ pixels. Their full/LQ delta discrepancy is0.75
 raw units. Both preserve original dimensions, all unrelated regions and padding. No
 original CA authoring TIFF or compiler equivalence is required for this forward proof.
 
-## Output boundary
+## Boundary before enabling complete edited exports
 
-The adapter requires an explicit nodal field; it does not infer one from arbitrary
-quantized full-DDS brush edits. `PreparedHeights` contains height-only validation data.
-Complete edited native campaign output also requires verified normal scale, composition
-and mip updates. The historical Rome witnesses validate the forward algorithm for those
-inputs; Attila/Thrones compatibility and game-runtime acceptance remain unverified here.
+The adapter does not infer a nodal field from arbitrary quantized full-DDS brush edits.
+The campaign-specific raise/lower path now retains an explicit continuous field before
+quantization, composes existing LF page commands with authority snapshots, and restores
+that field on project reopen. Other campaign brushes remain unsupported. Shared battle/raw
+brush semantics and the accepted forward adapter are unchanged.
+
+`PreparedHeights` is height-only validation data, not a complete map build. The native
+writer still refuses effective built campaign height edits, including CHMF-only changes
+whose full preview quantizes to a no-op. Authoring state never enters a native pack.
+Verified normal scale, composition and mip updates remain required. Storage observations
+are recorded in `docs/re/rome2_campaign_normals.md`; they do not establish a generator.
+An independent native demonstration can close that gap without reproducing the original
+Assembly Kit compiler. A Rome witness does not prove Attila/Thrones compatibility.
+Isolated application loading/painting/history/save/reopen/refusal has been exercised;
+no game-runtime acceptance or complete edited native output is claimed.
