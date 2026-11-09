@@ -30,17 +30,19 @@ pub(crate) fn file_error(file: &str, what: impl std::fmt::Display) -> MapIoError
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MapFiles {
     pub folder: BTreeMap<String, Blob>,
+    pub disk_source: Option<std::sync::Arc<wce_foundation::disk_changes::Folder>>,
 }
 
-fn collect(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Blob>) -> std::io::Result<()> {
+fn collect(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Blob>,disk:&mut wce_foundation::disk_changes::Folder) -> std::io::Result<()> {
     for e in std::fs::read_dir(dir)? {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
         if wce_foundation::publication::reserved(&name) { continue; }
         let rel = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
         if e.file_type()?.is_dir() {
-            collect(&e.path(), &rel, out)?;
+            collect(&e.path(), &rel, out,disk)?;
         } else {
+            disk.record(&e.path()).map_err(std::io::Error::other)?;
             out.insert(rel, Blob::File(e.path()));
         }
     }
@@ -52,7 +54,7 @@ impl MapFiles {
 
     /// Files read already (a folder of the game's packs).
     pub fn from_bytes(files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
-        Self { folder: files.into_iter().map(|(p, b)| (p, Blob::Bytes(std::sync::Arc::from(b)))).collect() }
+        Self { folder: files.into_iter().map(|(p, b)| (p, Blob::Bytes(std::sync::Arc::from(b)))).collect(),disk_source:None }
     }
 
     /// The files of a folder (not read yet: blobs that point at the files).
@@ -62,8 +64,9 @@ impl MapFiles {
     /// The folder could not be listed.
     pub fn from_dir(dir: &Path) -> Result<Self> {
         let mut folder = BTreeMap::new();
-        collect(dir, "", &mut folder)?;
-        Ok(Self { folder })
+        let mut disk=wce_foundation::disk_changes::Folder::empty(dir);
+        collect(dir, "", &mut folder,&mut disk)?;
+        Ok(Self { folder,disk_source:Some(std::sync::Arc::new(disk)) })
     }
 
 }

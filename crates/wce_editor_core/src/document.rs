@@ -90,6 +90,12 @@ pub trait Document: Any {
         Err(format!("{} cannot be saved", self.title()))
     }
 
+    /// External disk changes requiring the user's overwrite-or-cancel choice.
+    fn save_changes(&self, _target: &SaveTarget) -> Result<Option<String>, String> { Ok(None) }
+
+    /// Explicit overwrite still performs native validation and destination ownership checks.
+    fn save_overwrite(&mut self, target: &SaveTarget) -> Result<(), String> { self.save(target) }
+
     /// Puts everything the document shows into `layer` (called on open and when the whole document changed).
     fn publish(&mut self, scene: &mut RenderScene, layer: LayerId);
 

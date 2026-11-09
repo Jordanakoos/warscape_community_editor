@@ -682,6 +682,7 @@ impl TerrainTool {
     fn adopt(&mut self, e: &mut Editor, d: Box<MapDocument>) {
         let mut d = d;
         d.save_dir=save_dir(e,&d);
+        if let Err(err)=d.observe_save_destination(){self.status=err;return;}
         if let Some(path)=&d.save_dir { match e.docs.destination_owner(path,None) {
             Ok(Some(id)) => { self.status=format!("already open: {}",e.docs.find(id).map(|d|d.title()).unwrap_or_default()); return; },
             Ok(None) => {}, Err(err) => { self.status=err; return; }
@@ -945,6 +946,7 @@ impl TerrainTool {
         let i = self.inputs(e, name)?;
         let mut d = open_map(&i)?.document();
         d.save_dir = save_dir(e, &d);
+        d.observe_save_destination()?;
         self.take_start_season(&d);
         let summary = format!("{}: {}", d.name, d.summary());
         let rq = self.request(e, &d).ok_or("no kit with a tile database")?;

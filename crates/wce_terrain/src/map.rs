@@ -3,6 +3,7 @@
 //! was read from: a file not edited is written back as those bytes, an edited one is made again from the model (wce_terrain_io).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use wce_formats::xml_doc::XmlDoc;
 use wce_tile_model::Blob;
@@ -83,6 +84,8 @@ impl<T> Item<T> {
 pub struct MapModel {
     pub name: String,
     pub kind: MapKind,
+    /// Size/mtime observed at native enumeration, independent of immutable format provenance.
+    pub disk_source: Option<Arc<wce_foundation::disk_changes::Folder>>,
 
     pub layers: Vec<(LayerRole, Item<CellLayer>)>,
     pub lf: Vec<(LfRole, Item<PagedU16>)>,

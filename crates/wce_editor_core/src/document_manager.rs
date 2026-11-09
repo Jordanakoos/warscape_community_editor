@@ -14,8 +14,12 @@ struct Entry {
     published_version: u64,
 }
 
+#[derive(Clone)]
+pub struct ChangedSave {pub id:DocumentId,pub target:SaveTarget,pub reason:String}
+
 #[derive(Default)]
 pub struct DocumentManager {
+    pending_save: Option<ChangedSave>,
     entries: Vec<Entry>,
     order: Vec<DocumentId>,
 
@@ -204,18 +208,29 @@ impl DocumentManager {
     }
 
     /// Shared live Save/Save As boundary; ownership is checked before calling the document.
-    pub fn save_to(&mut self,id:DocumentId,target:&SaveTarget) -> Result<String,String> {
+    pub fn pending_changed_save(&self)->Option<&ChangedSave>{self.pending_save.as_ref()}
+    pub fn answer_changed_save(&mut self,overwrite:bool)->Result<String,String>{
+        let pending=self.pending_save.take().ok_or("no changed-file Save awaiting a choice")?;
+        if overwrite{self.save_with_policy(pending.id,&pending.target,true)}else{Ok("Save cancelled; document and files unchanged".into())}
+    }
+    pub fn save_to(&mut self,id:DocumentId,target:&SaveTarget)->Result<String,String>{self.save_with_policy(id,target,false)}
+    pub fn save_to_overwrite(&mut self,id:DocumentId,target:&SaveTarget)->Result<String,String>{self.save_with_policy(id,target,true)}
+    fn save_with_policy(&mut self,id:DocumentId,target:&SaveTarget,overwrite:bool) -> Result<String,String> {
         let d=self.find(id).ok_or("no such document")?;
         let destination=if target.path.as_os_str().is_empty(){d.save_destination()}else{d.save_destination().map(|_|target.path.clone())};
         if let Some(path)=destination && let Some(owner)=self.destination_owner(&path,Some(id))? {
             return Err(format!("Cannot save: {} is already owned by open document {owner}",path.display()));
+        }
+        if !overwrite && let Some(reason)=d.save_changes(target)? {
+            self.pending_save=Some(ChangedSave{id,target:target.clone(),reason:reason.clone()});
+            return Err(reason);
         }
         let Some(e) = self.entry_mut(id) else { return Err("no such document".to_owned()) };
         if !e.doc.can_save() {
             return Err(format!("{} cannot be saved", e.doc.title()));
         }
 
-        e.doc.save(target)?;
+        if overwrite{e.doc.save_overwrite(target)?;}else{e.doc.save(target)?;}
         e.doc.history_mut().mark_saved();
         let key = e.doc.source_key();
         let message = match e.doc.save_message() {
@@ -242,6 +257,7 @@ impl DocumentManager {
                 Err(message) => {
                     ok = false;
                     messages.push(format!("cannot save {title}: {message}"));
+                    if self.pending_save.is_some(){break;}
                 }
             }
         }
