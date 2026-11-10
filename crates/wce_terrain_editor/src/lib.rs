@@ -5,6 +5,7 @@ pub mod campaign_lf;
 pub mod document;
 pub mod lf;
 mod save_validation;
+mod native_props;
 pub mod terry;
 
 pub use document::{MapDocument, MapSource};

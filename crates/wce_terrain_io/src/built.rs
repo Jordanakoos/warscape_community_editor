@@ -109,6 +109,7 @@ pub fn read_as(name: &str, kind: MapKind, files: &MapFiles) -> Result<MapModel> 
     }
 
     campaign_authority::restore(&mut m)?;
+    crate::campaign_props::load(&mut m)?;
     Ok(m)
 }
 
@@ -171,6 +172,7 @@ fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
     let mut folder: BTreeMap<String, Blob> = m.carried.clone();
     folder.extend(scene);
     folder.retain(|p, _| !p.eq_ignore_ascii_case(campaign_authority::PROJECT_STATE));
+    crate::campaign_props::write(m, &mut folder)?;
 
     if let Some(t) = &m.tile_list {
         if t.path == TILE_MAP_VIEW {
