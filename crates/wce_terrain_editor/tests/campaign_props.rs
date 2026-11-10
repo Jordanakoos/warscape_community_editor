@@ -28,6 +28,7 @@ fn gizmo_gesture_merges_undo_redo_and_refusals_preserve_state() {
     let mut d=document();let item=SourceRef {doc:d.core().id(),item:PROP_KEY};
     let mut delta=Float4x4::IDENTITY;delta.m[0][3]=1.;
     d.transform_items(&[item],&delta,10);d.transform_items(&[item],&delta,10);
+    assert!((d.item_transform(item).unwrap().m[0][3]+1022.).abs()<1e-3);
     assert_eq!(d.history().size(),1);let moved=d.native_props().unwrap().position(0).unwrap();assert!(moved[0]>0.);
     let position=d.history().position();
     assert!(d.translate_native_props(&[(0,[f32::NAN,0.,0.])],12).is_err());
