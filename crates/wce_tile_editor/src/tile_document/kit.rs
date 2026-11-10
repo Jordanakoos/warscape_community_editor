@@ -26,32 +26,15 @@ fn kind_of(folder: &str) -> String {
 /// # Errors
 ///
 /// A file can't be read or written.
-fn copy_entry(entry_xml: &Path, from_raw: &Path, to_raw: &Path, kind: &str) -> Result<PathBuf, String> {
-    let database = |raw: &Path| raw.join("terrain/tiles").join(kind).join("_tile_database");
-    let name = entry_xml.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let text = std::fs::read_to_string(entry_xml).map_err(|e| format!("{}: {e}", entry_xml.display()))?;
-
-    let tiles = database(to_raw).join("TILES");
-    std::fs::create_dir_all(&tiles).map_err(|e| format!("{}: {e}", tiles.display()))?;
-    let target = tiles.join(&name);
-    if target.exists() {
-        if std::fs::read_to_string(&target).is_ok_and(|t| t == text) {
-            return Ok(target);
-        }
-
-        let _ = std::fs::copy(&target, target.with_extension("xml.bak"));
-    }
-
-    std::fs::write(&target, text).map_err(|e| format!("{}: {e}", target.display()))?;
-    let settings = database(to_raw).join("_settings.xml");
-    let kit_settings = database(from_raw).join("_settings.xml");
-    if !settings.exists() && kit_settings.is_file() {
-        std::fs::copy(&kit_settings, &settings).map_err(|e| format!("{}: {e}", kit_settings.display()))?;
-    }
-
-    // The editor resolves tiles through the indices, which have another entry now.
-    wce_formats::tile_index::TileIndex::forget_shared();
-    Ok(target)
+fn prepare_entry_copy(entry_xml:&Path,from_raw:&Path,to_raw:&Path,kind:&str)->Result<Vec<wce_foundation::publication::Output>,String>{
+    use wce_foundation::publication::{Output,Source};
+    let database=|raw:&Path|raw.join("terrain/tiles").join(kind).join("_tile_database");
+    let target=database(to_raw).join("TILES").join(entry_xml.file_name().ok_or("entry has no file name")?);
+    let mut outputs=vec![];let bytes=std::fs::read(entry_xml).map_err(|e|e.to_string())?;
+    if let Ok(old)=std::fs::read(&target){if old!=bytes{outputs.push(Output::new(target.with_extension("xml.bak"),Source::File(target.clone())));}}
+    let mut entry=Output::new(target,Source::Bytes(bytes.into()));entry.priority=4;outputs.push(entry);
+    let settings=database(to_raw).join("_settings.xml");let source=database(from_raw).join("_settings.xml");
+    if !settings.exists()&&source.is_file(){outputs.push(Output::new(settings,Source::File(source)));}Ok(outputs)
 }
 
 impl TileDocument {
@@ -101,19 +84,20 @@ impl TileDocument {
     /// # Errors
     ///
     /// The tile is not in a kit's layout, or the entry can't be copied.
-    pub(crate) fn make_project(&mut self) -> Result<PathBuf, String> {
+    pub(crate) fn make_project(&mut self) -> Result<(PathBuf,Vec<wce_foundation::publication::Output>), String> {
         let root = self.projects_root().ok_or("no projects folder")?.to_path_buf();
         let target = self.project_folder().ok_or_else(|| format!("{} is not under terrain/tiles/", self.project().dir.display()))?;
         let folder = tile_folder(&target).unwrap_or_default();
         let to_raw = root.join("raw_data");
         let has_entry = self.project().entry_file_for(&target).is_some_and(|f| f.is_file());
+        let mut outputs=vec![];
         if let (Some(entry), Some(from_raw)) = (self.project().entry.as_ref(), self.project().raw_root.clone())
             && !has_entry
         {
-            copy_entry(entry.file(), &from_raw, &to_raw, &kind_of(&folder))?;
+            outputs=prepare_entry_copy(entry.file(), &from_raw, &to_raw, &kind_of(&folder))?;
         }
 
-        Ok(target)
+        Ok((target,outputs))
     }
 
     /// After the first save of a kit's tile: the document is the project's now.
@@ -159,7 +143,7 @@ impl TileDocument {
         let v = self.project().variation.unwrap_or(0);
         let text = entry.variation_text(v).ok_or("the tile's variation is not in its entry")?;
         let entry_path = raw.join("terrain/tiles/battle/_tile_database/TILES").join(format!("{set}_{name}.xml"));
-        let (mut there, index) = if entry_path.is_file() {
+        let (there, index) = if entry_path.is_file() {
             let mut there = TileEntry::load(&entry_path).map_err(|e| e.to_string())?;
             if (there.width(), there.height()) != (entry.width(), entry.height()) {
                 return Err(format!("{set}/{name} is a {} x {} tile: a {} x {} tile can't be saved as a variation of it", there.width(), there.height(), entry.width(), entry.height()));
@@ -189,24 +173,21 @@ impl TileDocument {
             (there, 0)
         };
 
-        if let Some(dir) = entry_path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-
-        std::fs::write(&entry_path, there.save()).map_err(|_| format!("could not write {}", entry_path.display()))?;
-        there = TileEntry::load(&entry_path).map_err(|e| e.to_string())?;
-        wce_formats::tile_index::TileIndex::forget_shared();
-
+        // The new entry is published together with the tile, after all native output generation.
+        let extra=vec![wce_foundation::publication::Output::new(entry_path.clone(),wce_foundation::publication::Source::Bytes(there.save().into()))];
         // The document is the new tile's: its entry, variation and names; every file written there, then saved in place (the history's
         // saved mark).
         self.end_stroke();
         let p = &mut self.tile_mut().project;
+        let previous=(p.info.clone(),p.entry.clone(),p.variation,p.raw_root.clone());
         p.info.location = there.location();
         p.info.variation = variation.clone();
         p.entry = Some(there);
         p.variation = Some(index);
         p.raw_root = Some(raw);
-        let msg = self.save_tile(&wce_editor_core::document::SaveTarget { path: folder.clone() })?;
+        let result=self.save_tile_with_extra(&wce_editor_core::document::SaveTarget{path:folder.clone()},extra);
+        if result.is_err(){let p=&mut self.tile_mut().project;(p.info,p.entry,p.variation,p.raw_root)=previous;}
+        let msg=result?;
         self.tile_mut().project.dir = folder;
         self.save_tile(&wce_editor_core::document::SaveTarget::default())?;
         Ok(format!("saved as {set}/{name}/{variation}: {msg}"))
@@ -272,7 +253,7 @@ impl TileDocument {
         let mut there = wce_formats::tile_entry::TileEntry::load(&file).map_err(|e| e.to_string())?;
         there.set_tile_attr("width", &r.cells.0.to_string());
         there.set_tile_attr("height", &r.cells.1.to_string());
-        std::fs::write(&file, there.save()).map_err(|_| format!("could not write {}", file.display()))?;
+        wce_foundation::publication::Staged::prepare(vec![wce_foundation::publication::Output::new(file.clone(),wce_foundation::publication::Source::Bytes(there.save().into()))]).and_then(wce_foundation::publication::Staged::publish).map_err(|e|e.to_string())?;
         wce_formats::tile_index::TileIndex::forget_shared();
 
         let msg = wce_tile::resize::resize_maps(&dir, old, density, r)?;
@@ -309,6 +290,7 @@ impl TileDocument {
         self.end_stroke();
         let folder = tile_folder(&self.project().dir).ok_or_else(|| format!("{} is not under terrain/tiles/", self.project().dir.display()))?;
         let target = kit_raw.join(&folder);
+        let extra=if let(Some(entry),Some(from_raw))=(self.project().entry.as_ref(),self.project().raw_root.clone()){prepare_entry_copy(entry.file(),&from_raw,kit_raw,&kind_of(&folder))?}else{vec![]};
         let text = self.text_for_export(true)?;
         let (msg, report) = match walls {
             Some(w) if self.tile().has_generated_buildings() => {
@@ -319,7 +301,7 @@ impl TileDocument {
 
                 let polyfill = format!("{n} procedural wall(s) written as their pieces in the layer '{}' ({})", wce_walls::export::KIT_LAYER, wce_walls::pack::PROC_PACK);
                 let maps = self.tile_mut().project.export_maps()?;
-                self.project().save_for_kit_scene(&target, scene, vec![polyfill], &maps)?
+                self.project().save_for_kit_scene_with_extra(&target, scene, vec![polyfill], &maps,extra)?
             }
 
             None if self.tile().has_generated_buildings() => {
@@ -335,7 +317,7 @@ impl TileDocument {
                 }
 
                 let maps = self.tile_mut().project.export_maps()?;
-                self.project().save_for_kit_scene(&target, text, vec![], &maps)?
+                self.project().save_for_kit_scene_with_extra(&target, text, vec![], &maps,extra)?
             }
         };
 
@@ -345,7 +327,6 @@ impl TileDocument {
 
         let mut msg = msg;
         if let (Some(entry), Some(from_raw)) = (self.project().entry.as_ref(), self.project().raw_root.clone()) {
-            copy_entry(entry.file(), &from_raw, kit_raw, &kind_of(&folder))?;
 
             // The tile sets it uses (its own, its links') that the kit's database lacks (made in the projects: Tile database > New tile set).
             let mut names = vec![entry.tile_set()];

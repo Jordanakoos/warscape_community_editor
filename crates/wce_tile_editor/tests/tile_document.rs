@@ -48,6 +48,129 @@ fn text(d: &TileDocument) -> Vec<u8> {
     d.tile().tscene().save()
 }
 
+/// Road terrain is generated outside the command stack and marks the project maps dirty.
+fn save_fixture(dirty: [bool; 3]) -> (tempfile::TempDir, wce_tile::new_tile::NewTile, TileDocument) {
+    let dir = tempfile::tempdir().unwrap();
+    let tile = wce_tile::new_tile::NewTile {
+        name: "save_test".into(), cells_x: 1, cells_y: 1, height: 10.0, density: 32, seed: 123,
+    };
+    let folder = wce_tile::new_tile::create(&tile, &dir.path().join("raw_data"), None).unwrap();
+    let mut project = TileProject::open(&folder).unwrap();
+    project.load_blend().unwrap();
+    project.load_ground().unwrap();
+    [project.height_dirty, project.blend_dirty, project.ground_dirty] = dirty;
+    (dir, tile, TileDocument::new(project, None))
+}
+
+fn road_map_save(index: usize) {
+    use wce_editor_core::document::SaveTarget;
+    let mut dirty = [false; 3];
+    dirty[index] = true;
+    let (_dir, _tile, mut d) = save_fixture(dirty);
+    assert!(!d.history().modified());
+    let names = ["height_map_0.png", "blend_map.tif", "ground_type_map.png"];
+    let original: Vec<_> = names.iter().map(|name| std::fs::read(d.project().dir.join(name)).unwrap()).collect();
+    // A disk sentinel makes the dirty flag's effect observable independently of history edits.
+    std::fs::write(d.project().dir.join(names[index]), b"not the generated map").unwrap();
+    d.save(&SaveTarget::default()).unwrap();
+    for (name, bytes) in names.iter().zip(original) {
+        assert_eq!(std::fs::read(d.project().dir.join(name)).unwrap(), bytes, "{name}");
+    }
+    assert!(!d.project().height_dirty && !d.project().blend_dirty && !d.project().ground_dirty);
+    assert!(!d.history().modified());
+}
+
+#[test]
+fn direct_save_preserves_road_height_dirty() { road_map_save(0); }
+
+#[test]
+fn direct_save_preserves_road_blend_dirty() { road_map_save(1); }
+
+#[test]
+fn direct_save_preserves_road_ground_dirty() { road_map_save(2); }
+
+#[test]
+fn direct_save_failure_preserves_history_ranges_and_road_dirty_flags() {
+    use wce_editor_core::document::SaveTarget;
+    let (_dir, _tile, mut d) = save_fixture([true, false, true]);
+    let root = d.tile().tscene().scene_graph().unwrap();
+    assert!(d.set_flag(root, "OIF_VISIBLE", false));
+    let before = (text(&d), d.project().info.clone(), d.project().entry.as_ref().unwrap().save(),
+        d.history().size(), d.history().position(), d.history().version(), d.history().modified());
+    let path = d.project().dir.join("tile.wce");
+    let disk = std::fs::read(&path).unwrap();
+    let blocker = d.project().dir.join("tile.wce.wce_tmp");
+    std::fs::create_dir(&blocker).unwrap();
+    assert!(d.save(&SaveTarget::default()).is_err());
+    assert_eq!((text(&d), d.project().info.clone(), d.project().entry.as_ref().unwrap().save(),
+        d.history().size(), d.history().position(), d.history().version(), d.history().modified()), before);
+    assert_eq!([d.project().height_dirty, d.project().blend_dirty, d.project().ground_dirty], [true, false, true]);
+    assert_eq!(std::fs::read(path).unwrap(), disk);
+    std::fs::remove_dir(blocker).unwrap();
+    d.save(&SaveTarget::default()).unwrap();
+    assert!(!d.history().modified());
+}
+
+#[test]
+fn direct_save_stages_first_project_entry_and_settings_before_retargeting() {
+    use wce_editor_core::document::SaveTarget;
+    let (dir, tile, mut d) = save_fixture([false; 3]);
+    let settings = "terrain/tiles/battle/_tile_database/_settings.xml";
+    let settings_bytes = b"<settings opaque='retain exactly'/>\r\n";
+    std::fs::write(dir.path().join("raw_data").join(settings), settings_bytes).unwrap();
+    let projects = dir.path().join("projects");
+    d.set_projects_root(Some(projects.clone()));
+    let target = d.project_folder().unwrap();
+    std::fs::create_dir_all(&target).unwrap();
+    let blocker = target.join("tile.wce.wce_tmp");
+    std::fs::create_dir(&blocker).unwrap();
+    let before = (d.project().dir.clone(), d.project().info.clone(), d.project().entry.as_ref().unwrap().save(),
+        d.history().size(), d.history().position(), d.history().version(), d.history().modified());
+    let entry = tile.entry_file(&projects.join("raw_data"));
+    assert!(d.save(&SaveTarget::default()).is_err());
+    assert_eq!((d.project().dir.clone(), d.project().info.clone(), d.project().entry.as_ref().unwrap().save(),
+        d.history().size(), d.history().position(), d.history().version(), d.history().modified()), before);
+    assert!(!entry.exists());
+    assert!(!projects.join("raw_data").join(settings).exists());
+    assert!(!target.join("tile.wce").exists());
+    std::fs::remove_dir(blocker).unwrap();
+    d.save(&SaveTarget::default()).unwrap();
+    assert_eq!(d.project().dir, target);
+    assert!(d.is_project());
+    assert_eq!(std::fs::read(entry).unwrap(), before.2);
+    assert_eq!(std::fs::read(projects.join("raw_data").join(settings)).unwrap(), settings_bytes);
+    for name in ["tile.wce", "height_map_0.png", "blend_map.tif", "ground_type_map.png"] {
+        assert!(target.join(name).is_file(), "{name}");
+    }
+}
+
+#[test]
+fn direct_save_as_stages_database_variant_and_restores_identity_after_failure() {
+    let (dir, _tile, mut d) = save_fixture([true, false, true]);
+    let projects = dir.path().join("projects");
+    d.set_projects_root(Some(projects.clone()));
+    let target = projects.join("raw_data/terrain/tiles/battle/other/copied/variant");
+    std::fs::create_dir_all(&target).unwrap();
+    let blocker = target.join("tile.wce.wce_tmp");
+    std::fs::create_dir(&blocker).unwrap();
+    let before = (d.project().dir.clone(), d.project().info.clone(), d.project().entry.as_ref().unwrap().save(),
+        d.project().variation, d.project().raw_root.clone(), d.history().version(), d.history().modified());
+    let entry = projects.join("raw_data/terrain/tiles/battle/_tile_database/TILES/other_copied.xml");
+    assert!(d.save_tile_as("other", "copied", "variant", None).is_err());
+    assert_eq!((d.project().dir.clone(), d.project().info.clone(), d.project().entry.as_ref().unwrap().save(),
+        d.project().variation, d.project().raw_root.clone(), d.history().version(), d.history().modified()), before);
+    assert_eq!([d.project().height_dirty, d.project().blend_dirty, d.project().ground_dirty], [true, false, true]);
+    assert!(!entry.exists());
+    assert!(!target.join("tile.wce").exists());
+    std::fs::remove_dir(blocker).unwrap();
+    d.save_tile_as("other", "copied", "variant", None).unwrap();
+    assert_eq!(d.project().dir, target);
+    let saved = wce_formats::tile_entry::TileEntry::load(&entry).unwrap();
+    assert!(saved.find_variation("variant").is_some());
+    assert_eq!(saved.location(), d.project().info.location);
+    assert!(!d.history().modified());
+}
+
 #[test]
 fn flags_are_toggled_only_where_the_file_has_them() {
     let (_dir, mut d) = open();

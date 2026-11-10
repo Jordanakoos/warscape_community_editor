@@ -200,3 +200,17 @@ fn height_field() {
     while hf.redo() {}
     assert_eq!(hf.samples(), after.as_slice(), "redo reproduces the edit");
 }
+
+#[test]fn step_c_direct_tile_save_stages_copy_and_kit_outputs_without_mutating_on_failure(){
+    use wce_tile::tile_project::TileProject;
+    let root=std::env::temp_dir().join(format!("wce-tile-save-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let source=root.join("source");let out=root.join("output");std::fs::create_dir_all(&source).unwrap();std::fs::write(source.join("tile.ted"),TED).unwrap();std::fs::write(source.join("opaque.bin"),b"opaque preserved").unwrap();std::fs::write(source.join("ignored.wce_tmp"),b"leftover").unwrap();
+    let original=std::fs::metadata(source.join("opaque.bin")).unwrap().permissions();let mut p=original.clone();p.set_readonly(true);std::fs::set_permissions(source.join("opaque.bin"),p).unwrap();
+    let mut project=TileProject::open(&source).unwrap();let before=(project.scene.save(),project.prefab_notes.clone(),project.height_dirty,project.info.clone());
+    std::fs::create_dir_all(out.join("tile.wce.wce_tmp")).unwrap();
+    assert!(project.save(&out,true,false).is_err());assert!(!out.join("opaque.bin").exists());assert!(!out.join("tile.wce").exists());assert_eq!((project.scene.save(),project.prefab_notes.clone(),project.height_dirty,project.info.clone()),before);
+    std::fs::remove_dir(out.join("tile.wce.wce_tmp")).unwrap();project.save(&out,true,false).unwrap();assert_eq!(std::fs::read(out.join("opaque.bin")).unwrap(),b"opaque preserved");assert!(!std::fs::metadata(out.join("opaque.bin")).unwrap().permissions().readonly());assert!(!out.join("ignored.wce_tmp").exists());
+    let kit=root.join("kit");std::fs::create_dir_all(kit.join("tile.ted.wce_tmp")).unwrap();assert!(project.save_for_kit(&kit).is_err());assert!(!kit.join("opaque.bin").exists());assert!(!kit.join("tile.ted").exists());
+    std::fs::remove_dir(kit.join("tile.ted.wce_tmp")).unwrap();project.save_for_kit(&kit).unwrap();assert!(kit.join("tile.ted").is_file());assert!(!kit.join("ignored.wce_tmp").exists());
+    std::fs::set_permissions(source.join("opaque.bin"),original).unwrap();let canonical=root.canonicalize().unwrap();assert!(canonical.starts_with(std::env::temp_dir().canonicalize().unwrap())&&canonical.file_name().unwrap().to_string_lossy().starts_with("wce-tile-save-"));std::fs::remove_dir_all(canonical).unwrap();
+}
