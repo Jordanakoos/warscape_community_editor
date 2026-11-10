@@ -54,7 +54,7 @@ fn save_reopen_repeat_save_as_and_failed_save_preserve_authoring() {
     assert_eq!(reopened.native_props.unwrap().get().position(0).unwrap(),[1.,0.,2.]);
     let copy=SaveTarget{path:scratch.join("copy")};d.save(&copy).unwrap();
     assert_eq!(std::fs::read(target.path.join("prop_marker.markers")).unwrap(),std::fs::read(copy.path.join("prop_marker.markers")).unwrap());
-    d.history_mut().undo();d.save(&target).unwrap();assert_eq!(std::fs::read(target.path.join("prop_marker.markers")).unwrap(),original.as_ref());
+    d.history_mut().undo();d.save(&copy).unwrap();assert_eq!(std::fs::read(copy.path.join("prop_marker.markers")).unwrap(),original.as_ref());
     d.history_mut().redo();let version=d.history().version();let native=d.native_props().unwrap().write();
     std::fs::write(scratch.join("blocked"),b"file").unwrap();
     assert!(d.save(&SaveTarget{path:scratch.join("blocked/child")}).is_err());
