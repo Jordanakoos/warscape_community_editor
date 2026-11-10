@@ -16,4 +16,7 @@ mod tool;
 #[cfg(test)]
 mod position_refresh_tests;
 
+#[cfg(test)]
+mod validation_tests;
+
 pub use tool::TerrainTool;

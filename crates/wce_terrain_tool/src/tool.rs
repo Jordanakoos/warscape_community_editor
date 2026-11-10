@@ -287,6 +287,10 @@ struct OpenInputs {
     install: Option<PathBuf>,
 }
 
+#[cfg(test)]
+#[path = "validation_real_test.rs"]
+mod validation_real_tests;
+
 /// The Terrain tool's id: the owner of its documents.
 pub const TERRAIN_TOOL_ID: &str = "terrain";
 
@@ -1360,9 +1364,11 @@ impl TerrainTool {
     /// The checks of the shown map, again.
     fn validate(&mut self, e: &Editor) -> String {
         let roots = kit_roots(e);
-        self.findings = e.docs.find_as::<MapDocument>(self.shown).map(|d| crate::validate::check(d, &roots)).unwrap_or_default();
+        let files = e.files();
+        self.findings = e.docs.find_as::<MapDocument>(self.shown).map(|d| crate::validate::check(d, &roots, e.game(), files.as_deref())).unwrap_or_default();
         let errors = self.findings.iter().filter(|f| f.severity == crate::validate::Severity::Error).count();
-        format!("{errors} errors, {} warnings", self.findings.len() - errors)
+        let warnings = self.findings.iter().filter(|f| f.severity == crate::validate::Severity::Warning).count();
+        format!("{errors} errors, {warnings} warnings, {} informational limitations", self.findings.len() - errors - warnings)
     }
 
     /// The camera over a map cell.
@@ -1385,15 +1391,20 @@ impl TerrainTool {
         }
 
         gui::same_line();
-        gui::text_disabled("colours in no database, cells no tile fits, explicit tiles, tiles in no kit");
+        gui::text_disabled("On demand: resources, references and supported editing / Save / Export. Existing write guards still apply.");
         let mut go = None;
         for (i, f) in self.findings.iter().enumerate() {
-            let col = if f.severity == crate::validate::Severity::Error { [1.0, 0.45, 0.4, 1.0] } else { [1.0, 0.8, 0.3, 1.0] };
+            let col = match f.severity {
+                crate::validate::Severity::Error => [1.0, 0.45, 0.4, 1.0],
+                crate::validate::Severity::Warning => [1.0, 0.8, 0.3, 1.0],
+                crate::validate::Severity::Information => [0.6, 0.8, 1.0, 1.0],
+            };
             gui::push_id_int(i as i32);
             gui::push_style_color(gui::COL_TEXT as i32, gui::v4(col[0], col[1], col[2], col[3]));
-            if gui::selectable(&f.text, false, 0) {
+            if gui::selectable(&f.title(), false, 0) {
                 go = f.cell;
             }
+            gui::text_wrapped(&f.explanation());
 
             gui::pop_style_color(1);
             gui::pop_id();
@@ -2586,7 +2597,7 @@ impl Tool for TerrainTool {
         c.add("terrain_validate", "terrain_validate", "the Terrain tool: the shown map's checks (the Validation section): a count, then each finding", |e, _| {
             with_terrain(e, |t, e| {
                 let m = t.validate(e);
-                let lines: Vec<String> = t.findings.iter().map(|f| format!("{:?}: {}", f.severity, f.text)).collect();
+                let lines: Vec<String> = t.findings.iter().map(|f| f.display()).collect();
                 CommandResult::success(format!("{m}{}{}", if lines.is_empty() { "" } else { "\n" }, lines.join("\n")))
             })
         });
