@@ -1,6 +1,6 @@
 //! Maps in and out of the Terrain tool's model (`wce_terrain`), one module per game format. A format reads a [`MapFiles`] (the map's
 //! folder as named blobs) into a [`wce_terrain::MapModel`] and writes a model back into one; reading and writing never touch the disk
-//! themselves ([`MapFiles::from_dir`] / [`MapFiles::write_to`] do), so the gates run in memory.
+//! themselves (`MapFiles::from_dir` enumerates sources), so the gates run in memory.
 
 pub mod attila;
 pub mod built;
@@ -36,6 +36,7 @@ fn collect(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Blob>) -> std::i
     for e in std::fs::read_dir(dir)? {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
+        if wce_foundation::publication::reserved(&name) { continue; }
         let rel = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
         if e.file_type()?.is_dir() {
             collect(&e.path(), &rel, out)?;
@@ -65,28 +66,4 @@ impl MapFiles {
         Ok(Self { folder })
     }
 
-    /// Writes the files into `dir` (a file that is already its own target is left alone).
-    ///
-    /// # Errors
-    ///
-    /// A file could not be read or written.
-    pub fn write_to(&self, dir: &Path) -> Result<()> {
-        for (rel, blob) in &self.folder {
-            let target = dir.join(rel);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            match blob {
-                Blob::File(src) if src == &target => {}
-                Blob::File(src) => {
-                    std::fs::copy(src, &target)?;
-                }
-
-                Blob::Bytes(b) => std::fs::write(&target, b)?,
-            }
-        }
-
-        Ok(())
-    }
 }

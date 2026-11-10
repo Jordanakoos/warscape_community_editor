@@ -904,6 +904,7 @@ impl Editor {
     /// its tool's folder, with its title as the name.
     pub fn save_as_start(&self, id: DocumentId) -> PathBuf {
         let Some(d) = self.docs.find(id) else { return self.projects_dir() };
+        if let Some(dir)=d.save_destination() { return dir; }
         // A file of the game's files (packs or loose), at its place in the project's loose folder; not a tile's or a map's folder.
         let key = d.source_key();
         if let Some(key) = self.game_path(&key).filter(|k| self.vfs.as_ref().is_some_and(|v| v.owner(k).is_some())) {
@@ -1942,15 +1943,12 @@ impl Editor {
 
             if gui::menu_item(&format!("{}  Save as...", icons::FILE), None, false, can_save) {
                 let start = self.save_as_start(active);
-                if let Some(p) = file_dialog(true, &start, &[("All files".to_owned(), "*.*".to_owned())])
-                    && let Some(d) = self.docs.find_mut(active)
-                {
-                    let result = d.save(&wce_editor_core::document::SaveTarget { path: p });
-                    if result.is_ok() {
-                        d.history_mut().mark_saved();
-                    }
-
-                    let msg = result.map_or_else(|e| e, |()| "saved".to_owned());
+                let path=if self.docs.find(active).is_some_and(|d|d.save_destination().is_some()) {
+                    crate::steam_detect::pick_folder_at("Save map as",&start)
+                } else { file_dialog(true,&start,&[("All files".to_owned(),"*.*".to_owned())]) };
+                if let Some(p)=path {
+                    let result=self.docs.save_to(active,&wce_editor_core::document::SaveTarget {path:p});
+                    let msg = result.unwrap_or_else(|e|e);
                     self.status(&msg, false);
                 }
             }

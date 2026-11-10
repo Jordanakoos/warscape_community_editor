@@ -67,6 +67,9 @@ pub trait Document: Any {
         false
     }
 
+    /// A map's active Save folder, for duplicate opening and Save As ownership checks.
+    fn save_destination(&self) -> Option<PathBuf> { None }
+
     /// What the last save said beyond "saved" (what it wrote, a warning), shown with it; none by default.
     fn save_message(&self) -> Option<String> {
         None

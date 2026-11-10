@@ -6,3 +6,6 @@ pub mod lf;
 pub mod terry;
 
 pub use document::{MapDocument, MapSource};
+
+#[cfg(test)]
+mod publication_tests;
