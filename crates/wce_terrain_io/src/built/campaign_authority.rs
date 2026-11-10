@@ -49,6 +49,12 @@ fn originals(m: &MapModel) -> Result<MapFiles> {
 
 fn hashes(f: &MapFiles) -> Result<[u64; 3]> { Ok([fingerprint(&f.folder[NAMES[0]].bytes()?), fingerprint(&f.folder[NAMES[1]].bytes()?), fingerprint(&f.folder[NAMES[2]].bytes()?)]) }
 pub fn state_blob(m: &MapModel) -> Option<Blob> { m.carried.iter().find(|(p, _)| p.eq_ignore_ascii_case(PROJECT_STATE)).map(|(_, b)| b.clone()) }
+/// Inspect WCE's project-only authoring metadata without preparing any native height output.
+/// This does not certify profile compatibility, baseline identity or native export support.
+pub fn authoring_nodes(m: &MapModel) -> Result<usize> {
+    let Some(b) = state_blob(m) else { return Ok(0) };
+    Ok(State::decode(&b.bytes()?)?.map_or(0, |s| s.nodes.len()))
+}
 pub fn put_state(m: &mut MapModel, state: Option<Blob>) {
     m.carried.retain(|p, _| !p.eq_ignore_ascii_case(PROJECT_STATE));
     if let Some(b) = state { m.carried.insert(PROJECT_STATE.into(), b); }

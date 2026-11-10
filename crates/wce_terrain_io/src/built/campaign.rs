@@ -12,6 +12,12 @@ pub(super) fn check_heights(m: &MapModel) -> Result<bool> {
     if super::campaign_authority::edited(m)? {
         return Err(file_error("lf_height_map.dds", "edited campaign export is unsupported until native campaign-normal regeneration is verified; save the WCE authoring project instead"));
     }
+    check_preview_heights(m)
+}
+
+/// The existing arbitrary full-DDS edit guard, without preparing nodal authoring output.
+/// Suitable for on-demand diagnostics; project authoring state is checked separately.
+pub(super) fn check_preview_heights(m: &MapModel) -> Result<bool> {
     let campaign = m.kind == MapKind::Campaign
         || m.tile_list.as_ref().is_some_and(|t| t.get().is_campaign)
         || m.carried.keys().any(|p| p.eq_ignore_ascii_case("lf_height_map_lq.dds") || p.eq_ignore_ascii_case("lf_normal.dds"));

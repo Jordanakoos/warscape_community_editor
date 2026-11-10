@@ -16,11 +16,18 @@ pub(crate) fn load(m: &mut MapModel) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn write(m: &MapModel, folder: &mut std::collections::BTreeMap<String, Blob>) -> Result<()> {
+pub(crate) fn check_source(m: &MapModel) -> Result<()> {
     if let Some(props) = &m.native_props {
         if !m.built || m.kind != MapKind::Campaign || m.carried.get(&props.path) != Some(&props.origin) {
             return Err(file_error(&props.path, "native prop source association was replaced"));
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn write(m: &MapModel, folder: &mut std::collections::BTreeMap<String, Blob>) -> Result<()> {
+    check_source(m)?;
+    if let Some(props) = &m.native_props {
         folder.insert(props.path.clone(), Blob::Bytes(props.get().write()));
     }
     Ok(())

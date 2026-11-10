@@ -165,6 +165,38 @@ pub fn write_project(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::Ti
     write_for(m, db, true)
 }
 
+/// Read-only access to the same placement preservation guard used by the native writer.
+pub fn check_native_placements(m: &MapModel) -> Result<()> {
+    if let Some(t) = &m.tile_list && t.path != TILE_MAP_VIEW {
+        checked_tile_list(t)?;
+    }
+    Ok(())
+}
+
+fn checked_tile_list(t: &wce_terrain::Item<wce_tile::battle_map::tile_list::TileList>) -> Result<Option<Blob>> {
+    if t.edited() && (t.original_version().is_none_or(|v| v == 9) || t.get().version == 9) {
+        let bytes = t.origin.bytes()?;
+        let original = wce_tile::battle_map::tile_list::TileList::parse(&bytes).map_err(|err| file_error(&t.path, err))?;
+        if t.original_version().is_some_and(|v| v != original.version) {
+            return Err(file_error(&t.path, "original tile-list version differs from its loaded provenance"));
+        }
+        t.get().validate_placement_edit(&original).map_err(|err| file_error(&t.path, err))?;
+        if t.get().same_bits(&original) { return Ok(Some(Blob::Bytes(bytes))); }
+    }
+    Ok(None)
+}
+
+/// Check captured BLM/deployment associations and supported scene edits in memory; publish nothing.
+pub fn check_native_scene(m: &MapModel, project: bool) -> Result<()> {
+    scene::plan(m, project).map(|_| ())
+}
+
+/// Check the native prop source association without encoding or publishing its records.
+pub fn check_native_props(m: &MapModel) -> Result<()> { crate::campaign_props::check_source(m) }
+
+/// Compare effective full-LF samples using the native writer's existing guard. Does not compile authoring state.
+pub fn check_campaign_preview(m: &MapModel) -> Result<()> { campaign::check_preview_heights(m).map(|_| ()) }
+
 fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>, project: bool) -> Result<MapFiles> {
     // Native output refuses unsupported effective height changes. Campaign project save retains authoring state separately.
     let campaign = campaign::check_heights(m)?;
@@ -186,19 +218,7 @@ fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
                 }
             }
         } else {
-            let mut unchanged = None;
-            if t.edited() && (t.original_version().is_none_or(|v| v == 9) || t.get().version == 9) {
-                let bytes = t.origin.bytes()?;
-                let original = wce_tile::battle_map::tile_list::TileList::parse(&bytes).map_err(|err| file_error(&t.path, err))?;
-                if t.original_version().is_some_and(|v| v != original.version) {
-                    return Err(file_error(&t.path, "original tile-list version differs from its loaded provenance"));
-                }
-                t.get().validate_placement_edit(&original).map_err(|err| file_error(&t.path, err))?;
-                if t.get().same_bits(&original) {
-                    unchanged = Some(Blob::Bytes(bytes));
-                }
-            }
-
+            let unchanged = checked_tile_list(t)?;
             let blob = unchanged.unwrap_or_else(|| if t.edited() { Blob::Bytes(Arc::from(t.get().write())) } else { t.origin.clone() });
             folder.insert(t.path.clone(), blob);
         }
