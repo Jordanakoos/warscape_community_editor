@@ -112,7 +112,7 @@ struct Prop {
 }
 
 /// The key of a prop of the packs' markers.
-const MARKER_KEY: u64 = 1 << 59;
+const MARKER_KEY: u64 = wce_terrain::campaign_props::PROP_KEY;
 
 /// The props of a campaign map's `prop_marker.markers` in the packs (records with a `transform`, their group's key the model).
 fn marker_props(bytes: &[u8]) -> Vec<Prop> {
@@ -157,6 +157,7 @@ pub struct PropModels {
     /// `.terry` (Rome 2's built campaign maps) has the packs' `prop_marker.markers` (the same frame and transforms: what BOB makes of a
     /// `.terry`); its props are not pickable.
     props: Option<(DocumentId, u64, Vec<Prop>)>,
+    native_changed: Vec<u32>,
 
     /// The shown campaign's trees (its document; none: no list).
     trees: Option<(DocumentId, Option<Arc<CampaignTrees>>)>,
@@ -173,7 +174,7 @@ pub struct PropModels {
 
 impl Default for PropModels {
     fn default() -> Self {
-        Self { on: true, radius_cells: 96.0, layer: 0, drawn: std::collections::HashMap::new(), built: None, count: 0, props: None, trees: None, tree_count: 0, cities: None, city_count: 0, heights: vec![] }
+        Self { on: true, radius_cells: 96.0, layer: 0, drawn: std::collections::HashMap::new(), built: None, count: 0, props: None, native_changed: vec![], trees: None, tree_count: 0, cities: None, city_count: 0, heights: vec![] }
     }
 }
 
@@ -236,6 +237,28 @@ impl PropModels {
 
         if self.props.as_ref().is_none_or(|(id, rev, _)| *id != doc || *rev != key.1) {
             wce_foundation::wce_prof!("props.index");
+            if let Some(native)=d.native_props() {
+                // Native identities/counts never change. Reuse the index and update only records
+                // touched since the baseline (including those just undone).
+                if let Some((id,rev,list))=self.props.as_mut().filter(|(id,_,_)|*id==doc) {
+                    let _=id;
+                    for i in self.native_changed.iter().copied().chain(native.changed()) {
+                        if let Some(prop)=list.get_mut(i as usize) && let Ok(matrix)=native.matrix(i) {
+                            prop.matrix=matrix;prop.at=[f64::from(matrix[12]),f64::from(matrix[13]),f64::from(matrix[14])];
+                        }
+                    }
+                    *rev=key.1;
+                } else {
+                    let list=(0..native.len() as u32).filter_map(|i| {
+                        let matrix=native.matrix(i).ok()?;
+                        Some(Prop {key:MARKER_KEY|u64::from(i),item:MARKER_KEY|u64::from(i),
+                            at:[f64::from(matrix[12]),f64::from(matrix[13]),f64::from(matrix[14])],
+                            model:native.model(i)?.to_lowercase().replace('\\',"/"),matrix})
+                    }).collect();
+                    self.props=Some((doc,key.1,list));
+                }
+                self.native_changed=native.changed().collect();
+            } else {
             let list = match p {
                 Some(p) => p.entities.iter().filter_map(|x| match p.kind(x) {
                     EntityKind::Prop(model) if !model.is_empty() => Some(Prop {
@@ -251,6 +274,8 @@ impl PropModels {
             };
 
             self.props = Some((doc, key.1, list));
+            self.native_changed.clear();
+            }
         }
 
         let r = self.radius_cells * tf.cell;
@@ -403,7 +428,8 @@ impl PropModels {
         // A `.terry` edit (or another document): every model again; a camera move: only the difference.
         // Removed in one pass (the scene's `remove` moves its whole list each time: 55 ms a rebuild).
         let mut gone: Vec<std::ops::Range<EntityId>> = vec![];
-        if self.built.is_none_or(|b| b.0 != key.0 || b.1 != key.1) {
+        let native=d.native_props().is_some();
+        if self.built.is_none_or(|b| b.0 != key.0 || (b.1 != key.1 && !native)) {
             gone.extend(self.drawn.drain().map(|(_, ent)| ent..ent + 1));
         }
 
@@ -420,7 +446,9 @@ impl PropModels {
 
         self.count = out.len() - self.tree_count - self.city_count;
         for (k, world, payload, item) in out {
-            if self.drawn.contains_key(&k) {
+            if let Some(&ent)=self.drawn.get(&k) {
+                if native && wce_terrain::campaign_props::record_id(k).is_some()
+                    && e.scene.find(ent).is_some_and(|en|en.world.m!=world.m) {e.scene.update_world(ent,world);}
                 continue;
             }
 

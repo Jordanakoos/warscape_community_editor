@@ -3,6 +3,7 @@
 pub mod cells;
 pub mod document;
 pub mod lf;
+mod native_props;
 pub mod terry;
 
 pub use document::{MapDocument, MapSource};

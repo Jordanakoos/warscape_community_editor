@@ -175,6 +175,29 @@ impl MapDocument {
         self.model().and_then(|m| m.project.as_ref()).map(|p| p.get())
     }
 
+    pub fn native_props(&self) -> Option<&wce_terrain::campaign_props::CampaignProps> {
+        self.model()?.native_props.as_ref().map(|p|p.get())
+    }
+
+    /// All proposals are checked before pushing a command. Campaign props remain terrain-bound;
+    /// the native Y is retained until its landscape semantics are independently established.
+    pub fn translate_native_props(&mut self, positions:&[(u32,[f32;3])], key:u64) -> Result<bool,String> {
+        let props=self.native_props().ok_or("this map has no editable native props")?;
+        let mut checked=props.clone();
+        let mut edits=vec![];
+        let mut ids=std::collections::BTreeSet::new();
+        for &(id,after) in positions {
+            if !ids.insert(id){return Err("duplicate prop record".into());}
+            let before=props.position(id)?;
+            if after[1]!=before[1]{return Err("campaign prop translation supports X/Z; native Y is retained".into());}
+            if checked.translate(id,after)? {edits.push((id,before,after));}
+        }
+        if edits.is_empty(){return Ok(false);}
+        edits.sort_by_key(|e|e.0);
+        self.push_terry(Box::new(crate::native_props::TranslateProps {edits,key,revision:self.terry_revision.clone()}));
+        Ok(true)
+    }
+
     /// The `.terry` scene to change (the file is marked edited); a structural edit goes on the history with `push_terry` after.
     pub fn project_mut(&mut self) -> Option<&mut wce_terrain::terry::TerryProject> {
         self.history.model_mut().as_mut().and_then(|m| m.project.as_mut()).map(|p| p.edit())
@@ -188,6 +211,11 @@ impl MapDocument {
 
     /// An entity's position in the view's frame (scene units).
     pub fn frame_position(&self, id: u64) -> Option<wce_foundation::math::Float3> {
+        if let Some(record)=self.native_props().and_then(|_|wce_terrain::campaign_props::record_id(id)) {
+            let p=self.native_props()?.position(record).ok()?;
+            let (x,z)=self.terry_frame.to_frame(f64::from(p[0]),f64::from(p[2]));
+            return Some(wce_foundation::math::Float3::new(x as f32,(self.lf_metres_at(f64::from(p[0]),f64::from(p[2]))/0.2) as f32,z as f32));
+        }
         let p = self.project()?;
         p.entity(id)?;
         let w = p.world_position(id);
@@ -377,6 +405,9 @@ impl Document for MapDocument {
     }
 
     fn describe(&self, item: wce_scene::render_scene::SourceRef) -> String {
+        if let Some(id)=self.native_props().and_then(|_|wce_terrain::campaign_props::record_id(item.item)) {
+            return self.native_props().and_then(|p|p.model(id)).map_or_else(String::new,|m|format!("campaign prop {id}: {m}"));
+        }
         let Some(p) = self.project() else { return String::new() };
         p.entity(item.item).map_or_else(String::new, |e| format!("{} ({})", e.name, p.kind(e).name()))
     }
@@ -475,6 +506,21 @@ impl Document for MapDocument {
     }
 
     fn inspect(&mut self, item: wce_scene::render_scene::SourceRef, ins: &mut dyn wce_editor_core::inspector::Inspector) {
+        if let Some(id)=self.native_props().and_then(|_|wce_terrain::campaign_props::record_id(item.item)) {
+            if let Some(props)=self.native_props() && let Ok(mut p)=props.position(id) {
+                ins.section("Campaign prop (translation)");
+                ins.text("model","model",props.model(id).unwrap_or_default());
+                ins.text("record","native record",&id.to_string());
+                ins.text("native_y","native Y (retained)",&p[1].to_string());
+                let mut xz=[p[0],p[2]];
+                if ins.edit_float2("position","position X/Z",&mut xz,0.001) {
+                    p[0]=xz[0];p[2]=xz[1];
+                    if let Err(err)=self.translate_native_props(&[(id,p)],item.item|1){self.message=Some(err);}
+                }
+                if ins.gesture_ended(){self.history.break_merge();}
+            }
+            return;
+        }
         use crate::terry::TerryAttrCommand;
         let Some(p) = self.project() else { return };
         let Some(e) = p.entity(item.item).cloned() else { return };
@@ -566,6 +612,27 @@ impl Document for MapDocument {
     /// Moves entities by the gizmo's delta: an `ECTileAlignment` one snapped to the cell grid (256 m), a root `ECLandscapeAbove` one put on
     /// the LF; one undo step a gesture.
     fn transform_items(&mut self, items: &[wce_scene::render_scene::SourceRef], delta: &wce_foundation::math::Float4x4, gesture: u64) {
+        if self.native_props().is_some() && items.iter().any(|i|wce_terrain::campaign_props::record_id(i.item).is_some()) {
+            if (0..4).any(|r|(0..3).any(|c| delta.m[r][c] != if r==c {1.0}else{0.0})) || delta.m[3][3]!=1.0 || delta.m[1][3]!=0.0 {
+                self.message=Some("native campaign props support X/Z translation only".into());return;
+            }
+            let Some(props)=self.native_props() else{return};
+            let starts:Option<std::collections::HashMap<_,_>>=items.iter().map(|i| {
+                let id=wce_terrain::campaign_props::record_id(i.item)?;
+                Some((i.item,props.position(id).ok()?.map(f64::from)))
+            }).collect();
+            let Some(starts)=starts else {self.message=Some("select native campaign props together".into());return};
+            let previous=self.gesture.as_ref().filter(|g|g.0==gesture);
+            let starts=previous.map_or(starts,|g|g.1.clone());
+            let old=previous.map_or([0.;3],|g|g.2);
+            let u=self.terry_frame.unit;
+            let acc=[old[0]+f64::from(delta.m[0][3])*u,0.,old[2]+f64::from(delta.m[2][3])*u];
+            let positions:Vec<_>=starts.iter().map(|(&item,p)| (wce_terrain::campaign_props::record_id(item).unwrap(),[(p[0]+acc[0]) as f32,p[1] as f32,(p[2]+acc[2]) as f32])).collect();
+            match self.translate_native_props(&positions,gesture) {
+                Ok(_)=>self.gesture=Some((gesture,starts,acc)),Err(err)=>self.message=Some(err),
+            }
+            return;
+        }
         use crate::terry::TerryAttrCommand;
         let u = self.terry_frame.unit;
         let d = [f64::from(delta.m[0][3]) * u, f64::from(delta.m[1][3]) * u, f64::from(delta.m[2][3]) * u];
@@ -604,6 +671,12 @@ impl Document for MapDocument {
         for c in cmds {
             self.push_terry(Box::new(c));
         }
+    }
+
+    fn scale_items(&mut self, items:&[wce_scene::render_scene::SourceRef], _factor:[f32;3], delta:&wce_foundation::math::Float4x4, gesture:u64) {
+        if self.native_props().is_some() && items.iter().any(|i|wce_terrain::campaign_props::record_id(i.item).is_some()) {
+            self.message=Some("native campaign prop scale is retained".into());
+        } else {self.transform_items(items,delta,gesture);}
     }
 
     fn as_any(&self) -> &dyn Any {
