@@ -377,6 +377,10 @@ impl MapDocument {
             s += &format!(", {} .terry entities", p.get().entities.len());
         }
 
+        if let Some(p) = self.native_props() {
+            s += &format!(", {} native props (X/Z translation)", p.len());
+        }
+
         s
     }
 }

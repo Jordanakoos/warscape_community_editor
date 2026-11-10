@@ -166,6 +166,8 @@ inside one tag, every other file of the tile is untouched and the `.bak` is the 
 
 ## Saving and exporting
 
+**Campaign props in the Terrain tool:** on a supported native campaign map, click an existing prop model and move it with the Translate gizmo or the Inspector's **position X/Z**. One drag is one undo step. The prop stays on the campaign terrain; native Y, rotation, scale, model, flags and record identity are retained. Save/reopen uses the map's existing project folder, and File > Export > Built files includes the edited marker resource. Creating/deleting native props and changing their other fields are not supported. Attila kit projects keep their existing `.terry` prop controls and serialization. Native marker translation currently recognizes PROP_MARKER v4/v6/v9; unsupported or ambiguously grouped files remain view-only.
+
 The user's work has one home, the game's **projects folder** (`Settings::projects_dir`; [plans/save_system.md](plans/save_system.md)).
 **Save** always writes into it: tiles, maps and prefabs into `assembly_kit/` (the kit's layout), files opened from the game's packs (a
 weather file, the weather database, a UI layout) into `loose/<their path in the packs>`. `loose/` is mounted before every pack, so a save is
