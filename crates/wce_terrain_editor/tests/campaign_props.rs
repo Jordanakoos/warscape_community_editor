@@ -80,3 +80,31 @@ fn attila_terry_campaign_prop_still_uses_its_existing_adapter() {
     assert_eq!(wce_terrain_io::attila::write(d.model().unwrap()).unwrap().folder["map.terry"].bytes().unwrap().as_ref(),xml);
     assert!(d.native_props().is_none());
 }
+
+#[test]
+fn inspector_only_exposes_horizontal_position_and_refuses_invalid_input() {
+    use wce_editor_core::inspector::{Inspector,InspectTarget};
+    struct Edit { target:InspectTarget, position:[f32;2] }
+    impl Inspector for Edit {
+        fn target(&self)->InspectTarget{self.target}
+        fn set_target(&mut self,t:InspectTarget){self.target=t;}
+        fn section(&mut self,_:&str){}
+        fn text(&mut self,_:&str,_:&str,_:&str){}
+        fn edit_float2(&mut self,field:&str,_:&str,v:&mut [f32;2],_:f32)->bool{assert_eq!(field,"position");*v=self.position;true}
+        fn edit_float(&mut self,_:&str,_:&str,_:&mut f32,_:f32,_:f32,_:f32)->bool{panic!("unsupported native property")}
+        fn edit_float3(&mut self,_:&str,_:&str,_:&mut [f32;3],_:f32)->bool{panic!("unsupported native property")}
+        fn edit_int(&mut self,_:&str,_:&str,_:&mut i64,_:f32)->bool{panic!("unsupported native property")}
+        fn edit_color3(&mut self,_:&str,_:&str,_:&mut [f32;3])->bool{panic!("unsupported native property")}
+        fn edit_color4(&mut self,_:&str,_:&str,_:&mut [f32;4])->bool{panic!("unsupported native property")}
+        fn edit_bool(&mut self,_:&str,_:&str,_:&mut bool)->bool{panic!("unsupported native property")}
+        fn edit_string(&mut self,_:&str,_:&str,_:&mut String)->bool{panic!("unsupported native property")}
+        fn edit_choice(&mut self,_:&str,_:&str,_:&mut i32,_:&[String])->bool{panic!("unsupported native property")}
+        fn gesture_ended(&mut self)->bool{true}
+    }
+    let mut d=document();let src=SourceRef{doc:d.core().id(),item:PROP_KEY};
+    let mut edit=Edit{target:InspectTarget{doc:src.doc,item:src.item},position:[2.,3.]};
+    d.inspect(src,&mut edit);assert_eq!(d.native_props().unwrap().position(0).unwrap(),[2.,0.,3.]);
+    assert_eq!(d.history().size(),1);
+    edit.position=[f32::INFINITY,0.];d.inspect(src,&mut edit);
+    assert_eq!(d.native_props().unwrap().position(0).unwrap(),[2.,0.,3.]);assert_eq!(d.history().size(),1);
+}

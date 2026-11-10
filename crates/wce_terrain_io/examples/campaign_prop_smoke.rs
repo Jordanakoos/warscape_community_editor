@@ -29,7 +29,7 @@ fn main(){
         std::fs::write(root.join("original.markers"),marker.write()).unwrap();
         println!("synthetic fixture ready: {}",root.display());
     } else {
-        use rpfm_lib::{files::{Container,pack::Pack},games::supported_games::SupportedGames};
+        use rpfm_lib::{files::pack::Pack,games::supported_games::SupportedGames};
         let loose=std::fs::read(root.join("export").join(MAP).join("prop_marker.markers")).unwrap();
         let games=SupportedGames::default();let game=games.game("rome_2").unwrap();
         let mut pack=Pack::read_and_merge(&[root.join("export/terrain_wce_prop_test.pack")],game,false,false,false).unwrap();
