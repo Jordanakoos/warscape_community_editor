@@ -85,6 +85,9 @@ fn validation_original_metadata_inconsistency_and_unknown_layout_are_distinct() 
     let mut bad = list(1);
     let d = document(built::read("campaigns/control", &files(&bad)).unwrap());
     assert!(check(&d).iter().any(|f| f.category == Category::InvalidData && f.text.contains("paired rows")));
+    let mut m = built::read("campaigns/control", &files(&bad)).unwrap();
+    let _ = m.tile_list.as_mut().unwrap().edit(); // Taking a mutable reference is not an effective native edit.
+    assert!(check(&document(m)).iter().any(|f| f.category == Category::InvalidData && f.text.contains("paired rows")));
     bad.tail = vec![99, 1, 2, 3];
     let source = files(&bad);
     let mut m = built::read("campaigns/control", &source).unwrap();

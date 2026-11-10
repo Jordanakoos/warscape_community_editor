@@ -143,6 +143,7 @@ pub fn check(d: &MapDocument, roots: &[PathBuf], game: &GameProfile, files: Opti
     }
     if let Some(t) = &m.tile_list {
         let list = t.get();
+        let placement_error = built::check_native_placements(m).err();
         // A name index is a reliable reference even when the trailer's opaque semantics are unknown.
         for (n, p) in list.placements.iter().enumerate().filter(|(_, p)| p.name >= list.names.len()) {
             let mut f = finding(m, game, Error, InvalidData, &t.path, "placement editing / native Export", format!("Placement refers to missing tile name {} ({} names available).", p.name, list.names.len()));
@@ -150,10 +151,10 @@ pub fn check(d: &MapDocument, roots: &[PathBuf], game: &GameProfile, files: Opti
         }
         if list.version == 9 {
             match list.v9_paired_metadata_count() {
-                Err(e) => out.push(finding(m, game, Warning, InvalidData, &t.path, "placement editing", format!("Recognized v9 placement metadata is inconsistent: {e}. Original bytes remain preserved."))),
+                Err(e) if placement_error.is_none() => out.push(finding(m, game, Warning, InvalidData, &t.path, "placement editing", format!("Recognized v9 placement metadata is inconsistent: {e}. Original bytes remain preserved."))),
                 Ok(Some(n)) if n != 0 && n as usize != list.placements.len() => {
                     // During an attempted count edit the checked writer below explains the refusal; do not call that source corruption.
-                    if !t.edited() { out.push(finding(m, game, Warning, InvalidData, &t.path, "placement editing", format!("The v9 metadata has {n} paired rows for {} placements. Original bytes remain preserved.", list.placements.len()))); }
+                    if placement_error.is_none() { out.push(finding(m, game, Warning, InvalidData, &t.path, "placement editing", format!("The v9 metadata has {n} paired rows for {} placements. Original bytes remain preserved.", list.placements.len()))); }
                 }
                 Ok(None) => out.push(finding(m, game, Information, Limitation, &t.path, "placement editing", "Unknown v9 metadata is preserved unchanged. WCE cannot safely edit this placement representation.")),
                 _ => {}
@@ -161,7 +162,7 @@ pub fn check(d: &MapDocument, roots: &[PathBuf], game: &GameProfile, files: Opti
         } else if list.version >= 11 {
             out.push(finding(m, game, Information, Limitation, &t.path, "placement editing", "This native placement version is readable and retained; the current placement editor supports Rome II versions 7–9."));
         }
-        if let Err(e) = built::check_native_placements(m) {
+        if let Some(e) = placement_error {
             out.push(finding(m, game, Error, UnsupportedOperation, &t.path, "Save / native Export", format!("The current placement edit cannot be written losslessly: {e}. Undo the unsupported edit.")));
         }
     } else if m.built && (has("terrain.tile_list") || has("tile_map.index") && has("tile_map.tiles")) {
