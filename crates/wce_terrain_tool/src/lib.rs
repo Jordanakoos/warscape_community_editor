@@ -13,4 +13,7 @@ mod terry_view;
 mod validate;
 mod tool;
 
+#[cfg(test)]
+mod position_refresh_tests;
+
 pub use tool::TerrainTool;
