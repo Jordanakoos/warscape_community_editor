@@ -111,19 +111,31 @@ struct Prop {
     item: u64,
 }
 
-fn prop_instance(prop: &Prop, frame: &Frame, tf: wce_terrain_editor::document::TerryFrame) -> (Float4x4, Payload) {
+fn prop_instance(
+    prop: &Prop,
+    frame: &Frame,
+    tf: wce_terrain_editor::document::TerryFrame,
+) -> (Float4x4, Payload) {
     let (fx, fz) = tf.to_frame(prop.at[0], prop.at[2]);
     let mut world = Float4x4::IDENTITY;
     for row in 0..3 {
-        for col in 0..3 { world.m[row][col] = prop.matrix[col * 4 + row] * (1.0 / tf.unit) as f32; }
+        for col in 0..3 {
+            world.m[row][col] = prop.matrix[col * 4 + row] * (1.0 / tf.unit) as f32;
+        }
     }
     world.m[0][3] = fx as f32;
     world.m[1][3] = frame.lift(fx, fz);
     world.m[2][3] = fz as f32;
     let p16 = DEFAULT_INSTANCE_PARAMS;
     let mesh = MeshInstance {
-        model: prop.model.clone(), casts_shadow: true, lod: true, p4: [p16[0], p16[1], p16[2], p16[3]], p5: [p16[4], p16[5], p16[6], p16[7]],
-        p6: [p16[8], p16[9], p16[10], p16[11]], p7: [p16[12], p16[13], p16[14], p16[15]], burning: false,
+        model: prop.model.clone(),
+        casts_shadow: true,
+        lod: true,
+        p4: [p16[0], p16[1], p16[2], p16[3]],
+        p5: [p16[4], p16[5], p16[6], p16[7]],
+        p6: [p16[8], p16[9], p16[10], p16[11]],
+        p7: [p16[12], p16[13], p16[14], p16[15]],
+        burning: false,
     };
     (world, Payload::MeshInstance(mesh))
 }
@@ -145,25 +157,55 @@ mod position_tests {
         let mut scene = RenderScene::default();
         view.layer = scene.add_layer(doc, "prop models");
         let p = d.project().unwrap();
-        let list: Vec<_> = p.entities.iter().map(|e| Prop { key: e.id, at: p.world_position(e.id),
-            model: if e.id == 1 { "a".into() } else { "b".into() }, matrix: wce_terrain_io::attila::campaign::matrix(p, e), item: e.id }).collect();
+        let list: Vec<_> = p
+            .entities
+            .iter()
+            .map(|e| Prop {
+                key: e.id,
+                at: p.world_position(e.id),
+                model: if e.id == 1 { "a".into() } else { "b".into() },
+                matrix: wce_terrain_io::attila::campaign::matrix(p, e),
+                item: e.id,
+            })
+            .collect();
         for prop in &list {
             let (world, payload) = prop_instance(prop, &frame, d.terry_frame);
-            let ent = scene.add(view.layer, world, payload, SourceRef { doc, item: prop.item });
+            let ent = scene.add(
+                view.layer,
+                world,
+                payload,
+                SourceRef {
+                    doc,
+                    item: prop.item,
+                },
+            );
             view.drawn.insert(prop.key, ent);
         }
-        view.props = Some((doc, 0, list)); view.count = 2;
-        let selected = view.drawn[&1]; let other = scene.find(view.drawn[&2]).unwrap().clone();
+        view.props = Some((doc, 0, list));
+        view.count = 2;
+        let selected = view.drawn[&1];
+        let other = scene.find(view.drawn[&2]).unwrap().clone();
         let structure = scene.structure_revision();
         let src = SourceRef { doc, item: 1 };
-        let mut delta = Float4x4::IDENTITY; delta.m[0][3] = 20.;
+        let mut delta = Float4x4::IDENTITY;
+        delta.m[0][3] = 20.;
         d.transform_items(&[src], &delta, 1);
         for action in [0, 1, 2] {
-            if action == 1 { d.history_mut().undo(); }
-            if action == 2 { d.history_mut().redo(); }
+            if action == 1 {
+                d.history_mut().undo();
+            }
+            if action == 2 {
+                d.history_mut().redo();
+            }
             view.refresh_positions(&d, &frame, &mut scene, doc, [2.56; 2], &[1]);
             let p = d.project().unwrap();
-            let expected = Prop { key: 1, at: p.world_position(1), model: "a".into(), matrix: wce_terrain_io::attila::campaign::matrix(p, p.entity(1).unwrap()), item: 1 };
+            let expected = Prop {
+                key: 1,
+                at: p.world_position(1),
+                model: "a".into(),
+                matrix: wce_terrain_io::attila::campaign::matrix(p, p.entity(1).unwrap()),
+                item: 1,
+            };
             let (world, payload) = prop_instance(&expected, &frame, d.terry_frame);
             assert_eq!(scene.find(selected).unwrap().world, world);
             assert_eq!(scene.find(selected).unwrap().payload, payload);
@@ -172,7 +214,9 @@ mod position_tests {
             assert!(scene.pickable(scene.find(selected).unwrap()));
             assert_eq!(view.count, 2);
         }
-        view.built_at = [2.56; 2]; view.built_radius = view.radius_cells; view.built_frame = Some(Arc::downgrade(&frame));
+        view.built_at = [2.56; 2];
+        view.built_radius = view.radius_cells;
+        view.built_frame = Some(Arc::downgrade(&frame));
         assert!(view.same_position_context(&frame, [2.56; 2]));
         assert!(!view.same_position_context(&frame, [2.57, 2.56]));
         let (_, different_frame) = crate::position_refresh_tests::fixture();
@@ -180,10 +224,12 @@ mod position_tests {
         view.radius_cells = 0.01;
         assert!(!view.same_position_context(&frame, [2.56; 2]));
         view.refresh_positions(&d, &frame, &mut scene, doc, [2.56; 2], &[1]);
-        assert!(!view.drawn.contains_key(&1)); assert_eq!(view.count, 1);
+        assert!(!view.drawn.contains_key(&1));
+        assert_eq!(view.count, 1);
         d.history_mut().undo();
         view.refresh_positions(&d, &frame, &mut scene, doc, [2.56; 2], &[1]);
-        assert_eq!(scene.find(view.drawn[&1]).unwrap().source, src); assert_eq!(view.count, 2);
+        assert_eq!(scene.find(view.drawn[&1]).unwrap().source, src);
+        assert_eq!(view.count, 2);
     }
 }
 
@@ -249,24 +295,56 @@ pub struct PropModels {
 
 impl Default for PropModels {
     fn default() -> Self {
-        Self { on: true, radius_cells: 96.0, layer: 0, drawn: std::collections::HashMap::new(), built: None, built_at: [0.; 2], built_radius: 0., built_frame: None, count: 0, props: None, trees: None, tree_count: 0, cities: None, city_count: 0, heights: vec![] }
+        Self {
+            on: true,
+            radius_cells: 96.0,
+            layer: 0,
+            drawn: std::collections::HashMap::new(),
+            built: None,
+            built_at: [0.; 2],
+            built_radius: 0.,
+            built_frame: None,
+            count: 0,
+            props: None,
+            trees: None,
+            tree_count: 0,
+            cities: None,
+            city_count: 0,
+            heights: vec![],
+        }
     }
 }
 
 impl PropModels {
     fn same_position_context(&self, frame: &Arc<Frame>, at: [f64; 2]) -> bool {
-        self.built_at == at && self.built_radius == self.radius_cells
-            && self.built_frame.as_ref().is_some_and(|f| f.ptr_eq(&Arc::downgrade(frame)))
+        self.built_at == at
+            && self.built_radius == self.radius_cells
+            && self
+                .built_frame
+                .as_ref()
+                .is_some_and(|f| f.ptr_eq(&Arc::downgrade(frame)))
     }
 
-    fn refresh_positions(&mut self, d: &MapDocument, frame: &Frame, scene: &mut wce_scene::render_scene::RenderScene, doc: DocumentId, at: [f64; 2], ids: &[u64]) {
+    fn refresh_positions(
+        &mut self,
+        d: &MapDocument,
+        frame: &Frame,
+        scene: &mut wce_scene::render_scene::RenderScene,
+        doc: DocumentId,
+        at: [f64; 2],
+        ids: &[u64],
+    ) {
         wce_foundation::wce_prof!("props.position_refresh");
         let Some(p) = d.project() else { return };
-        let Some((_, _, list)) = self.props.as_mut() else { return };
+        let Some((_, _, list)) = self.props.as_mut() else {
+            return;
+        };
         let r = self.radius_cells * d.terry_frame.cell;
         let mut gone = vec![];
         for &id in ids {
-            let Some(prop) = list.iter_mut().find(|prop| prop.key == id) else { continue };
+            let Some(prop) = list.iter_mut().find(|prop| prop.key == id) else {
+                continue;
+            };
             let Some(e) = p.entity(id) else { continue };
             prop.at = p.world_position(id);
             prop.matrix = wce_terrain_io::attila::campaign::matrix(p, e);
@@ -275,11 +353,21 @@ impl PropModels {
                 if let Some(&ent) = self.drawn.get(&id) {
                     scene.update_world(ent, world);
                 } else {
-                    let ent = scene.add(self.layer, world, payload, SourceRef { doc, item: prop.item });
-                    self.drawn.insert(id, ent); self.count += 1;
+                    let ent = scene.add(
+                        self.layer,
+                        world,
+                        payload,
+                        SourceRef {
+                            doc,
+                            item: prop.item,
+                        },
+                    );
+                    self.drawn.insert(id, ent);
+                    self.count += 1;
                 }
             } else if let Some(ent) = self.drawn.remove(&id) {
-                gone.push(ent); self.count -= 1;
+                gone.push(ent);
+                self.count -= 1;
             }
         }
         scene.remove_ids(&gone);
@@ -307,14 +395,27 @@ impl PropModels {
             return;
         }
 
-        let moved = self.built.filter(|b| b.0 == doc && b.2 == key.2 && b.1 % 2 == key.1 % 2
-            && self.same_position_context(&frame, [tx, tz])
-            && p.is_some() && d.model().is_some_and(|m| !m.built) && e.scene.layer(self.layer).is_some()
-            && self.props.as_ref().is_some_and(|(id, revision, _)| *id == doc && *revision == b.1))
+        let moved = self
+            .built
+            .filter(|b| {
+                b.0 == doc
+                    && b.2 == key.2
+                    && b.1 % 2 == key.1 % 2
+                    && self.same_position_context(&frame, [tx, tz])
+                    && p.is_some()
+                    && d.model().is_some_and(|m| !m.built)
+                    && e.scene.layer(self.layer).is_some()
+                    && self
+                        .props
+                        .as_ref()
+                        .is_some_and(|(id, revision, _)| *id == doc && *revision == b.1)
+            })
             .and_then(|b| d.terry_revision.positions_since(b.1 / 2));
         if let Some(ids) = moved {
             self.refresh_positions(d, &frame, &mut e.scene, doc, [tx, tz], &ids);
-            if let Some((_, revision, _)) = self.props.as_mut() { *revision = key.1; }
+            if let Some((_, revision, _)) = self.props.as_mut() {
+                *revision = key.1;
+            }
             self.built = Some(key);
             return;
         }

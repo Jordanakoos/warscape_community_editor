@@ -38,20 +38,33 @@ mod removal_tests {
         let mut view = TerryView::default();
         view.layer = scene.add_layer(doc, "terry entities");
         for id in [1, 2] {
-            let ent = scene.add(view.layer, Float4x4::IDENTITY, Payload::Overlay(overlay(&d, &frame, id, view.show, view.season).unwrap()), SourceRef { doc, item: id });
+            let ent = scene.add(
+                view.layer,
+                Float4x4::IDENTITY,
+                Payload::Overlay(overlay(&d, &frame, id, view.show, view.season).unwrap()),
+                SourceRef { doc, item: id },
+            );
             view.shown.insert(id, ent);
         }
         let selected = view.shown[&1];
         let unrelated = scene.find(view.shown[&2]).unwrap().clone();
         let structure = scene.structure_revision();
         let src = SourceRef { doc, item: 1 };
-        let mut delta = Float4x4::IDENTITY; delta.m[0][3] = 20.;
+        let mut delta = Float4x4::IDENTITY;
+        delta.m[0][3] = 20.;
         d.transform_items(&[src], &delta, 1);
         for action in [0, 1, 2] {
-            if action == 1 { d.history_mut().undo(); }
-            if action == 2 { d.history_mut().redo(); }
+            if action == 1 {
+                d.history_mut().undo();
+            }
+            if action == 2 {
+                d.history_mut().redo();
+            }
             view.refresh_positions(&d, &frame, &mut scene, doc, [2.56; 2], &[1]);
-            assert_eq!(scene.find(selected).unwrap().payload, Payload::Overlay(overlay(&d, &frame, 1, view.show, view.season).unwrap()));
+            assert_eq!(
+                scene.find(selected).unwrap().payload,
+                Payload::Overlay(overlay(&d, &frame, 1, view.show, view.season).unwrap())
+            );
             assert_eq!(scene.find(unrelated.id), Some(&unrelated));
             assert_eq!(scene.structure_revision(), structure);
             assert!(scene.pickable(scene.find(selected).unwrap()));
@@ -268,8 +281,22 @@ pub struct TerryView {
 impl Default for TerryView {
     fn default() -> Self {
         Self {
-            show: [true, true, true, true], radius_m: 40_000.0, season: 0, mode: Mode::Select, points: vec![], picked: None, layer: 0, shown: HashMap::new(), built: None, built_frame: None, draft: 0,
-            new: NewCampaignEntity { scale: 0.3, radii: [100.0, 150.0], ..Default::default() },
+            show: [true, true, true, true],
+            radius_m: 40_000.0,
+            season: 0,
+            mode: Mode::Select,
+            points: vec![],
+            picked: None,
+            layer: 0,
+            shown: HashMap::new(),
+            built: None,
+            built_frame: None,
+            draft: 0,
+            new: NewCampaignEntity {
+                scale: 0.3,
+                radii: [100.0, 150.0],
+                ..Default::default()
+            },
         }
     }
 }
@@ -367,21 +394,38 @@ impl TerryView {
         scene.remove_ids(&ids);
     }
 
-    fn refresh_positions(&mut self, d: &MapDocument, frame: &Frame, scene: &mut RenderScene, doc: DocumentId, centre: [f64; 2], ids: &[u64]) {
+    fn refresh_positions(
+        &mut self,
+        d: &MapDocument,
+        frame: &Frame,
+        scene: &mut RenderScene,
+        doc: DocumentId,
+        centre: [f64; 2],
+        ids: &[u64],
+    ) {
         wce_foundation::wce_prof!("terry.position_refresh");
         let Some(p) = d.project() else { return };
         let mut gone = vec![];
         for &id in ids {
             let w = p.world_position(id);
             let o = ((w[0] - centre[0]).hypot(w[2] - centre[1]) <= f64::from(self.radius_m))
-                .then(|| overlay(d, frame, id, self.show, self.season)).flatten();
+                .then(|| overlay(d, frame, id, self.show, self.season))
+                .flatten();
             match (self.shown.get(&id).copied(), o) {
                 (Some(ent), Some(o)) => scene.update_payload(ent, Payload::Overlay(o)),
                 (None, Some(o)) => {
-                    let ent = scene.add(self.layer, Float4x4::IDENTITY, Payload::Overlay(o), SourceRef { doc, item: id });
+                    let ent = scene.add(
+                        self.layer,
+                        Float4x4::IDENTITY,
+                        Payload::Overlay(o),
+                        SourceRef { doc, item: id },
+                    );
                     self.shown.insert(id, ent);
                 }
-                (Some(ent), None) => { self.shown.remove(&id); gone.push(ent); }
+                (Some(ent), None) => {
+                    self.shown.remove(&id);
+                    gone.push(ent);
+                }
                 _ => {}
             }
         }
@@ -401,23 +445,47 @@ impl TerryView {
         });
 
         if !fresh {
-            let moved = self.built.filter(|(bd, _, bs, brad, bc)| *bd == doc && *bs == (self.show, self.season)
-                && *brad == self.radius_m && (bc[0] - at[0]).hypot(bc[1] - at[1]) < f64::from(self.radius_m) / 4.0
-                && e.scene.layer(self.layer).is_some() && self.built_frame.as_ref().is_some_and(|f| f.ptr_eq(&std::sync::Arc::downgrade(&frame))))
+            let moved = self
+                .built
+                .filter(|(bd, _, bs, brad, bc)| {
+                    *bd == doc
+                        && *bs == (self.show, self.season)
+                        && *brad == self.radius_m
+                        && (bc[0] - at[0]).hypot(bc[1] - at[1]) < f64::from(self.radius_m) / 4.0
+                        && e.scene.layer(self.layer).is_some()
+                        && self
+                            .built_frame
+                            .as_ref()
+                            .is_some_and(|f| f.ptr_eq(&std::sync::Arc::downgrade(&frame)))
+                })
                 .and_then(|b| d.terry_revision.positions_since(b.1).map(|ids| (b.4, ids)));
             if let Some((centre, ids)) = moved {
                 self.refresh_positions(d, &frame, &mut e.scene, doc, centre, &ids);
                 // Keep the original radius centre: small camera moves must not accumulate into an unrefreshed window.
-                self.built = Some((doc, revision, (self.show, self.season), self.radius_m, centre));
+                self.built = Some((
+                    doc,
+                    revision,
+                    (self.show, self.season),
+                    self.radius_m,
+                    centre,
+                ));
             } else {
                 wce_foundation::wce_prof!("terry.full_refresh");
                 let r = f64::from(self.radius_m);
-                let wanted: Vec<u64> = p.entities.iter().map(|x| x.id).filter(|&id| {
-                    let w = p.world_position(id);
-                    (w[0] - at[0]).hypot(w[2] - at[1]) <= r
-                }).collect();
+                let wanted: Vec<u64> = p
+                    .entities
+                    .iter()
+                    .map(|x| x.id)
+                    .filter(|&id| {
+                        let w = p.world_position(id);
+                        (w[0] - at[0]).hypot(w[2] - at[1]) <= r
+                    })
+                    .collect();
 
-                let overlays: Vec<(u64, Overlay)> = wanted.into_iter().filter_map(|id| Some((id, overlay(d, &frame, id, self.show, self.season)?))).collect();
+                let overlays: Vec<(u64, Overlay)> = wanted
+                    .into_iter()
+                    .filter_map(|id| Some((id, overlay(d, &frame, id, self.show, self.season)?)))
+                    .collect();
                 if self.layer == 0 || e.scene.layer(self.layer).is_none() {
                     self.layer = e.scene.add_layer(doc, "terry entities");
                     self.shown.clear();
@@ -427,7 +495,12 @@ impl TerryView {
                 }
 
                 for (id, o) in overlays {
-                    let ent = e.scene.add(self.layer, Float4x4::IDENTITY, Payload::Overlay(o), SourceRef { doc, item: id });
+                    let ent = e.scene.add(
+                        self.layer,
+                        Float4x4::IDENTITY,
+                        Payload::Overlay(o),
+                        SourceRef { doc, item: id },
+                    );
                     self.shown.insert(id, ent);
                 }
 

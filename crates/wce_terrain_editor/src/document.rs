@@ -182,11 +182,18 @@ impl MapDocument {
 
     /// A `.terry` edit onto the history (applied by pushing it, or already done: `TerrySpliceCommand::done`).
     pub fn push_terry(&mut self, cmd: Box<dyn wce_editor_core::command::Command<Option<MapModel>>>) {
-        let revision = self.terry_revision.load(std::sync::atomic::Ordering::Relaxed);
+        let revision = self
+            .terry_revision
+            .load(std::sync::atomic::Ordering::Relaxed);
         self.history.push(cmd);
         // Attribute commands already recorded their precise invalidation. Pre-applied splices still need a full one.
-        if self.terry_revision.load(std::sync::atomic::Ordering::Relaxed) == revision {
-            self.terry_revision.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self
+            .terry_revision
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == revision
+        {
+            self.terry_revision
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
