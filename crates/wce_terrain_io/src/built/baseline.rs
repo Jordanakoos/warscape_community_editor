@@ -89,7 +89,9 @@ impl Baseline {
             }
         }
         let entries = inventory(&files);
-        let body = format!("{MAGIC}\n{}\n{game}\n{} {} {} {}\n{}", pipeline(), s[0], s[1], s[2], s[3], entries_text(&entries));
+        let text = entries_text(&entries);
+        parse_entries(&text)?; // Never create a context that its bounded reader rejects.
+        let body = format!("{MAGIC}\n{}\n{game}\n{} {} {} {}\n{}", pipeline(), s[0], s[1], s[2], s[3], text);
         let b = Self { descriptor: Descriptor { id: digest(body.as_bytes()), game: game.into(), shape: s, entries, body }, files };
         b.validate()?;
         Ok(b)
@@ -161,6 +163,11 @@ impl Baseline {
     pub fn check_model(&self, m: &MapModel) -> Result<(), String> {
         if shape(m)? != self.descriptor.shape {
             return Err("native baseline geometry differs from document".into());
+        }
+        if m.carried.keys().any(|key| normal(key) && !self.files.keys().any(|original| original.eq_ignore_ascii_case(key))) {
+            return Err(
+                "native normal inventory differs from the verified baseline; preserve and resolve the extra resources explicitly".into()
+            );
         }
         Ok(())
     }

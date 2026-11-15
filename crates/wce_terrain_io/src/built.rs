@@ -243,10 +243,10 @@ fn write_for(
                 .map(|b| b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect())
                 .unwrap_or_default();
             let chunk_name = |i: i64| format!("normals/normal_{i}.dds");
-            let count = folder
-                .keys()
-                .filter(|k| k.to_ascii_lowercase().starts_with("normals/normal_") && k.to_ascii_lowercase().ends_with(".dds"))
-                .count();
+            let count = base.map_or_else(
+                || folder.keys().filter(|k| baseline::normal(k)).count(),
+                |b| b.files.keys().filter(|k| baseline::normal(k)).count(),
+            );
             let shipped = |i: i64| {
                 folder.iter().find(|(k, _)| k.eq_ignore_ascii_case(&chunk_name(i))).and_then(|(_, b)| b.bytes().ok()).map(|b| b.to_vec())
             };

@@ -488,3 +488,23 @@ fn native_resource_spelling_survives_save_and_verified_reopen() {
     assert_eq!(output.keys().collect::<Vec<_>>(), input.folder.keys().collect::<Vec<_>>());
     assert_eq!(digest(&output["Normals/Normal_0.DDS"]), GOLDEN);
 }
+
+#[test]
+fn extra_native_normal_chunks_cannot_silently_disable_the_baseline_calculation() {
+    let s = Scratch::new();
+    let mut d = project(&s.0);
+    edit(&mut d, &A);
+    let before = read(&s.0);
+    let mut model = d.publication_model().unwrap();
+    model.carried.insert("normals/normal_1.dds".into(), model.carried[N].clone());
+    assert!(d.authoring.write(&model, Some(&d.db), true).unwrap_err().contains("inventory differs"));
+    let root = s.0.join("reopened-extra");
+    d.save_authoring_copy(&root).unwrap();
+    drop(d);
+    fs::copy(native(&root).join(N), native(&root).join("normals/normal_1.dds")).unwrap();
+    let mut d = open(&root, false);
+    edit(&mut d, &B);
+    assert!(d.save(&SaveTarget::default()).is_err());
+    assert!(native(&root).join("normals/normal_1.dds").is_file());
+    assert_eq!(read(&s.0), before);
+}
