@@ -34,6 +34,7 @@ fn compare(source: &std::path::Path, saved: &std::path::Path) -> Vec<String> {
 fn inputs(raw: PathBuf, roots: &[PathBuf]) -> OpenInputs {
     let folders: Vec<_> = roots.iter().map(|r| r.join(database_dir(MapKind::Campaign))).filter(|r| r.is_dir()).collect();
     OpenInputs {
+        authoring_root: raw.clone(),
         name: "campaigns/main_attila_map".into(),
         game_dir: "terrain/battles/main_attila_map",
         roots: roots.to_vec(),

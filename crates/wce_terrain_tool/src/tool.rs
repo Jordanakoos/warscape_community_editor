@@ -4,6 +4,8 @@
 //! read into the model too), then makes its view's frame on another (the map's LF), then streams it around the camera
 //! (`wce_map_view::MapView`) in the map's own frame: origin at the map's centre, x along the columns, z up the rows, heights from the sea.
 
+mod authoring;
+
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,6 +44,7 @@ const UNIT: f64 = 2.0;
 
 /// A map read on a worker: what its document is made of (the document itself stays on the UI thread).
 struct Loaded {
+    authoring: Arc<wce_terrain_editor::authoring::Authoring>,
     name: String,
     source: MapSource,
     model: Option<wce_terrain::MapModel>,
@@ -62,6 +65,8 @@ struct Loaded {
 impl Loaded {
     fn document(self) -> Box<MapDocument> {
         let mut d = MapDocument::new(self.name, self.source, self.model, self.placed, self.locations, self.db);
+        d.authoring = self.authoring;
+        d.save_dir = d.authoring.owned_dir();
         d.fill_messages = self.messages;
         d.view_roads = self.roads;
         d.restored_from = self.restored_from;
@@ -321,6 +326,7 @@ fn kit_campaign_maps(raw: &std::path::Path) -> Vec<String> {
 }
 
 struct OpenInputs {
+    authoring_root: PathBuf,
     name: String,
     game_dir: &'static str,
     raw: PathBuf,
@@ -613,7 +619,8 @@ fn open_map(i: &OpenInputs) -> Result<Loaded, String> {
             // A game without kit maps: the built files are the model (its LF the one shown: a saved copy's edits).
             let model = match &i.built {
                 Some(_) => {
-                    let m = wce_terrain_io::built::read(&i.name, &built_files(i, &folder)?).map_err(|e| e.to_string())?;
+                    let mut m = wce_terrain_io::built::read(&i.name, &built_files(i, &folder)?).map_err(|e| e.to_string())?;
+                    m.kind = map_kind(&i.name).0;
                     if let Some(f) = m.lf(LfRole::Land) {
                         Arc::make_mut(&mut placed).lf = Some(lf_field(f.get()));
                     }
@@ -658,7 +665,28 @@ fn open_map(i: &OpenInputs) -> Result<Loaded, String> {
     }
 
     let roads = if kind == MapKind::Campaign { campaign_roads(i) } else { None };
-    Ok(Loaded { name: i.name.clone(), source, model, placed, locations, db, messages, roads, restored_from: i.restored_from.clone() })
+    let authoring = if let (Some(m), Some(native)) = (&model, &i.built) {
+        if let Some(slot) = &i.restored_from {
+            wce_terrain_editor::authoring::Authoring::restore(slot, m)?
+        } else {
+            let map = i.name.strip_suffix(wce_map_view::maps::GAME_FILES).unwrap_or(&i.name);
+            wce_terrain_editor::authoring::Authoring::discover(&i.authoring_root, i.game.key, map, native, m, m.disk_source.is_none())
+        }
+    } else {
+        wce_terrain_editor::authoring::Authoring::new(model.as_ref())
+    };
+    Ok(Loaded {
+        authoring: Arc::new(authoring),
+        name: i.name.clone(),
+        source,
+        model,
+        placed,
+        locations,
+        db,
+        messages,
+        roads,
+        restored_from: i.restored_from.clone(),
+    })
 }
 
 impl TerrainTool {
@@ -739,6 +767,7 @@ impl TerrainTool {
             let render_lf = campaign_render_lf(std::slice::from_ref(&raw), map_kind(name).0);
             let built = Some(built_dir(e, name));
             return Ok(OpenInputs {
+                authoring_root: e.projects_dir(),
                 name: name.to_owned(),
                 game_dir: e.game().campaign_battle_map,
                 roots: vec![raw.clone()],
@@ -765,6 +794,7 @@ impl TerrainTool {
         let db = self.databases_of(&roots, map_kind(name).0)?;
         let render_lf = campaign_render_lf(&roots, map_kind(name).0);
         Ok(OpenInputs {
+            authoring_root: e.projects_dir(),
             name: name.to_owned(),
             game_dir: e.game().campaign_battle_map,
             roots,
@@ -864,7 +894,10 @@ impl TerrainTool {
         if self.rx.is_some() {
             return Err(format!("the Terrain tool is busy ({})", self.busy));
         }
-
+        if copy.join(wce_terrain_editor::authoring::RECOVERY).exists() {
+            self.restore_project_now(e, copy)?;
+            return Ok(());
+        }
         let map = MapDocument::complete_autosave(copy)?;
         self.refresh_maps(e);
         let mut i = self.inputs(e, name)?;
@@ -902,7 +935,9 @@ impl TerrainTool {
             ground: self.rings.ground,
             far: self.view.far_ring(self.rings.far),
             bake_ground: e.game().key != wce_vfs::GameProfile::ROME_2.key,
-            raw_root: database_root(e).or_else(|| self.packs.as_ref().and_then(|p| p.raw().ok()))?,
+            raw_root: database_root(e)
+                .or_else(|| self.packs.as_ref().and_then(|p| p.raw().ok()))
+                .or_else(|| m.placements.is_empty().then(|| e.projects_dir()))?,
             tile_roots: roots,
             game_kit: wce_tile::vegetation::params_kit(&wce_tile::sources::kit_raw_roots(e.settings_ref())),
             look: TerrainLook { season: self.season.clone(), ..TerrainLook::default() },
@@ -918,7 +953,9 @@ impl TerrainTool {
     /// started; changes made to it during the read are asked about again.
     fn adopt(&mut self, e: &mut Editor, d: Box<MapDocument>) {
         let mut d = d;
-        d.save_dir = save_dir(e, &d);
+        if d.save_dir.is_none() {
+            d.save_dir = save_dir(e, &d);
+        }
         if let Err(err) = d.observe_save_destination() {
             self.status = err;
             return;
@@ -964,7 +1001,9 @@ impl TerrainTool {
 
         self.status = format!("{}: {}", d.name, d.summary());
         self.take_start_season(&d);
-        d.save_dir = save_dir(e, &d);
+        if d.save_dir.is_none() {
+            d.save_dir = save_dir(e, &d);
+        }
         match e.replace_document(TERRAIN_TOOL_ID, d) {
             Ok(id) => self.start_view(e, id),
             Err(err) => e.status(&format!("Terrain: {err}"), true),
@@ -1228,7 +1267,9 @@ impl TerrainTool {
         self.refresh_maps(e);
         let i = self.inputs(e, name)?;
         let mut d = open_map(&i)?.document();
-        d.save_dir = save_dir(e, &d);
+        if d.save_dir.is_none() {
+            d.save_dir = save_dir(e, &d);
+        }
         d.observe_save_destination()?;
         self.take_start_season(&d);
         let summary = format!("{}: {}", d.name, d.summary());
@@ -1882,6 +1923,7 @@ impl TerrainTool {
     }
 
     fn draw_export(&mut self, e: &mut Editor) {
+        authoring::draw(self, e, self.shown);
         if !gui::collapsing_header("Export", 0) {
             return;
         }
@@ -2273,6 +2315,7 @@ impl Tool for TerrainTool {
     }
 
     fn register_commands(&self, c: &mut CommandRegistry<Editor>) {
+        authoring::register(c);
         c.add(
             "terrain_open",
             "terrain_open <map | campaign>",

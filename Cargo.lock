@@ -2500,6 +2500,7 @@ dependencies = [
  "wce_terrain",
  "wce_terrain_io",
  "wce_tile",
+ "wce_tile_io",
  "wce_tile_model",
 ]
 

@@ -17,3 +17,6 @@ wce_tile_model = { path = "../wce_tile_model" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+wce_tile_io = { path = "../wce_tile_io" }

@@ -27,6 +27,7 @@ pub enum MapSource {
 }
 
 pub struct MapDocument {
+    pub authoring: Arc<crate::authoring::Authoring>,
     core: DocumentCore,
     history: CommandStack<Option<MapModel>>,
     // Only live source bytes, never prepared outputs: a partially published normal cannot
@@ -180,6 +181,7 @@ impl MapDocument {
             model.as_ref().and_then(|m| m.disk_source.as_deref()),
         )));
         Self {
+            authoring: Arc::new(crate::authoring::Authoring::new(model.as_ref())),
             io_changes,
             io_gate: Default::default(),
             normal_source_bytes: Default::default(),
@@ -211,9 +213,19 @@ impl MapDocument {
     ///
     /// The map is read-only, or a file can't be made or written.
     pub fn autosave_to(&self, dir: &Path) -> Result<(), String> {
-        let model = self.model().ok_or("a map of the game's packs is read-only")?;
-        let files = if model.built { wce_terrain_io::built::write(model, Some(&self.db)) } else { wce_terrain_io::attila::write(model) }
-            .map_err(|e| e.to_string())?;
+        let _lease = self.begin_io()?;
+        let model = self.publication_model()?;
+        // A damaged/missing authority must not cost the user their editable LF.
+        // Recovery drafts preserve samples and mark the original authority;
+        // Save/Export still require that authority to verify successfully.
+        let files = self.authoring.write(&model, Some(&self.db), false).or_else(|_| {
+            if model.built {
+                wce_terrain_io::built::write_draft(&model, Some(&self.db), false).map_err(|e| e.to_string())
+            } else {
+                wce_terrain_io::attila::write(&model).map_err(|e| e.to_string())
+            }
+        })?;
+        self.authoring.save_recovery(dir)?;
         let map = dir.join(AUTOSAVE_MAP);
         let mut refs = String::new();
         for (rel, blob) in &files.folder {
@@ -793,6 +805,19 @@ impl Document for MapDocument {
 }
 
 impl MapDocument {
+    pub fn configure_authoring(&mut self, root: &Path, game: &str, map: &str, native: &Path, trusted: bool) {
+        if let Some(m) = self.model() {
+            self.authoring = Arc::new(crate::authoring::Authoring::discover(root, game, map, native, m, trusted));
+        }
+    }
+    pub fn restore_authoring(&mut self, slot: &Path) -> Result<(), String> {
+        let m = self.model().ok_or("no map")?;
+        self.authoring = Arc::new(crate::authoring::Authoring::restore(slot, m)?);
+        if let Some(dir) = self.authoring.owned_dir() {
+            self.save_dir = Some(dir);
+        }
+        Ok(())
+    }
     pub fn begin_io(&self) -> Result<wce_foundation::operation::Lease, String> {
         self.io_gate.acquire()
     }
@@ -812,24 +837,50 @@ impl MapDocument {
         }
         Ok(())
     }
+    pub fn save_authoring_copy(&mut self, root: &Path) -> Result<(), String> {
+        let context = self.authoring.context()?.ok_or("adopt a native baseline before making an authoring-aware copy")?;
+        let native = format!("native/{}", context.map);
+        let copy = context.copy_to(root, &native)?;
+        self.save_native_context(&SaveTarget { path: copy.native_dir() }, false, Some(copy))
+    }
     fn save_native(&mut self, target: &SaveTarget, overwrite: bool) -> Result<(), String> {
+        self.save_native_context(target, overwrite, None)
+    }
+    fn save_native_context(
+        &mut self,
+        target: &SaveTarget,
+        overwrite: bool,
+        copy: Option<wce_terrain_io::built::baseline::Context>,
+    ) -> Result<(), String> {
         let _lease = self.begin_io()?;
         let dir = if target.path.as_os_str().is_empty() {
             self.save_dir.clone().ok_or("no projects folder to save into")?
         } else {
             target.path.clone()
         };
+        self.authoring.check_destination(&dir)?;
         let model = self.model().ok_or("a map of the game's packs is read-only")?;
         let writing = self.publication_model()?;
-        let files = if writing.built {
-            wce_terrain_io::built::write_project(&writing, Some(&self.db))
+        let files = self.authoring.write(&writing, Some(&self.db), true)?;
+        let owned = self.save_dir.as_ref().map(|own| wce_foundation::save_path::key(own)).transpose()?
+            == Some(wce_foundation::save_path::key(&dir)?);
+        let context = if let Some(copy) = copy {
+            Some(copy)
+        } else if owned {
+            self.authoring.context()?
         } else {
-            wce_terrain_io::attila::write(&writing)
+            None
+        };
+        if let Some(c) = &context {
+            if wce_foundation::save_path::key(&c.native_dir())? != wce_foundation::save_path::key(&dir)? {
+                return Err("native Save destination differs from authoring owner".into());
+            }
         }
-        .map_err(|e| e.to_string())?;
+        let completion = context.as_ref().map(|c| c.completion(&files)).transpose()?;
+        let metadata = completion.as_ref().map(|(output, _)| output.path.clone());
         let retained = crate::save_validation::preflight(model, &files, &dir)?;
         let attempt = std::cell::RefCell::new(self.io_changes.lock().map_err(|e| e.to_string())?.begin(&dir, overwrite)?);
-        let outputs = files
+        let mut outputs: Vec<_> = files
             .folder
             .iter()
             .filter(|(name, _)| !retained.contains(*name))
@@ -843,6 +894,9 @@ impl MapDocument {
                 output
             })
             .collect();
+        if let Some((output, _)) = &completion {
+            outputs.push(output.clone());
+        }
         let staged = wce_foundation::publication::Staged::prepare(outputs).map_err(|e| e.to_string())?;
         let mut normal_sources = vec![];
         for (key, blob) in &files.folder {
@@ -879,9 +933,18 @@ impl MapDocument {
                     }
                     *n -= 1;
                 }
-                attempt.borrow().check_target(path)
+                if let Some(c) = &context {
+                    c.check_record()?;
+                }
+                if metadata.as_deref() == Some(path) { Ok(()) } else { attempt.borrow().check_target(path) }
             },
             |path| {
+                if metadata.as_deref() == Some(path) {
+                    if owned && let Some((_, next)) = &completion {
+                        self.authoring.accept_completion(next.clone());
+                    }
+                    return Ok(());
+                }
                 attempt.borrow_mut().published(path)?;
                 self.io_changes.lock().map_err(|e| e.to_string())?.published(&attempt.borrow(), path)?;
                 if lf_source.as_ref().is_some_and(|source| wce_foundation::save_path::key(path).as_ref() == Ok(source)) {
@@ -911,6 +974,9 @@ impl MapDocument {
             }
         }
         if owned {
+            if let Some((_, next)) = completion {
+                self.authoring.accept_completion(next);
+            }
             self.history.mark_saved();
             self.restored_from = None;
         }

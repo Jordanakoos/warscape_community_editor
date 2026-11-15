@@ -158,9 +158,17 @@ fn write(
 pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[PathBuf], out: PathBuf) -> Result<ExportJob, String> {
     let d = e.docs.find_as::<MapDocument>(doc).ok_or("no map shown")?;
     let lease = d.begin_io()?;
+    let folder = out.join(game_folder(&d.name).0);
+    d.authoring.check_destination(&folder)?;
+    if let Some(owned) = &d.save_dir
+        && wce_foundation::save_path::key(owned)? == wce_foundation::save_path::key(&folder)?
+    {
+        return Err("native Export needs an independent destination; use Save for the owned map".into());
+    }
     let model = d.publication_model()?;
     let changes = d.io_changes.clone();
     let normals = d.normal_inputs();
+    let authoring = d.authoring.clone();
     let attempt = changes.lock().map_err(|e| e.to_string())?.begin_export(&out)?;
     let map = d.name.clone();
     let revision = wce_editor_core::document::Document::history(d).version();
@@ -174,7 +182,11 @@ pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[Pa
     std::thread::spawn(move || {
         let _lease = lease;
         let t0 = Instant::now();
-        let built = if model.built { Some(built_changes(&model, &db, &name, packs.as_deref())) } else { None };
+        let built = if model.built {
+            Some(authoring.write(&model, Some(&db), false).and_then(|written| built_changes(written, &name, packs.as_deref())))
+        } else {
+            None
+        };
         let r = built
             .unwrap_or_else(|| {
                 build(&model, &BuildInputs { db: &db, environment_map: &env, tile_upgrades: &upgrades }).map_err(|err| err.to_string())
@@ -199,12 +211,10 @@ pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[Pa
 
 /// A built map's files that differ from the packs' (or the packs lack), as a build's.
 fn built_changes(
-    model: &wce_terrain::MapModel,
-    db: &TileDatabase,
+    written: wce_terrain_io::MapFiles,
     name: &str,
     packs: Option<&dyn wce_vfs::files::Files>,
 ) -> Result<wce_terrain_io::attila::build::Built, String> {
-    let written = wce_terrain_io::built::write(model, Some(db)).map_err(|err| err.to_string())?;
     let (folder, _) = game_folder(name);
     let mut files = vec![];
     for (rel, blob) in &written.folder {

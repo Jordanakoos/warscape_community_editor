@@ -9,7 +9,6 @@ use wce_editor_core::{
     document::{Document, SaveTarget},
     document_manager::DocumentManager,
 };
-use wce_formats::chmf::{ChmfFile, ChmfRegion, encode_region};
 use wce_terrain::{LfRole, MapModel, paged::PagedU16};
 use wce_terrain_io::{MapFiles, built};
 use wce_tile::battle_map::{context::PlacedMap, tile_db::TileDatabase, tile_list::TileList};
@@ -45,12 +44,13 @@ impl Scratch {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir(&p).unwrap();
-        Self(p)
+        std::fs::create_dir(p.join("native")).unwrap();
+        Self(p.join("native"))
     }
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let target = self.0.canonicalize().unwrap();
+        let target = self.0.parent().unwrap().canonicalize().unwrap();
         let root = std::env::temp_dir().canonicalize().unwrap();
         assert!(target.starts_with(root) && target.file_name().unwrap().to_string_lossy().starts_with("wce-pr5-publication-"));
         for p in std::fs::read_dir(&target).unwrap().flatten().map(|p| p.path()) {
@@ -66,20 +66,27 @@ impl Drop for Scratch {
     }
 }
 fn fixture() -> MapFiles {
-    let mut c = ChmfFile { version: 5, width: 48, height: 48, cells_x: 1, cells_y: 8, min: 0.0, max: 65535.0, spacing: 1, regions: vec![] };
-    for y in (0..48).step_by(16) {
-        for x in (0..48).step_by(16) {
-            let (_, offsets, data) = encode_region(16, 16, &[10000; 256]);
-            c.regions.push(ChmfRegion { rect: [x, y, x + 16, y + 16], tag: [10000, 65535], offsets, data });
-        }
-    }
-    MapFiles::from_bytes([
-        ("lf_height_map.data".into(), c.write()),
-        ("lf_height_map.dds".into(), wce_terrain_io::attila::heights::lf_height_dds(&PagedU16::filled(192, 192, 10000))),
-        ("lf_height_map_lq.dds".into(), wce_terrain_io::attila::heights::lf_height_dds(&PagedU16::filled(96, 96, 10000))),
-        ("terrain.tile_list".into(), TileList { version: 9, is_campaign: false, battle_size: [48, 48], ..Default::default() }.write()),
-        ("normals/normal_0.dds".into(), b"opaque unsupported normals stay original".to_vec()),
-    ])
+    let mut f = crate::baseline_tests::fixture();
+    f.folder.insert(
+        "lf_height_map_lq.dds".into(),
+        Blob::Bytes(Arc::from(wce_terrain_io::attila::heights::lf_height_dds(&PagedU16::filled(96, 96, 10000)))),
+    );
+    f
+}
+// Publication tests explicitly select the known synthetic originals; they do
+// not rely on implicit adoption or on opaque/unsupported normal resources.
+fn bind(d: &mut MapDocument) {
+    let target = d.save_dir.clone().or_else(|| d.model().and_then(|m| m.disk_source.as_ref().map(|f| f.root.clone())));
+    let Some(target) = target else {
+        return;
+    };
+    let owner =
+        target.ancestors().find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("wce-pr5-publication-"))).unwrap();
+    let rel = target.strip_prefix(owner).unwrap().to_string_lossy().replace('\\', "/");
+    let map = format!("test-{}", &wce_terrain_io::built::baseline::digest(rel.as_bytes())[..16]);
+    let baseline = wce_terrain_io::built::baseline::Baseline::capture(&built::read("test", &fixture()).unwrap(), "rome_2").unwrap();
+    wce_terrain_io::built::baseline::Context::create(owner, &map, &rel, &baseline).unwrap();
+    d.configure_authoring(owner, "rome_2", &map, &target, false);
 }
 
 fn doc(m: MapModel) -> MapDocument {
@@ -89,6 +96,7 @@ fn doc(m: MapModel) -> MapDocument {
     MapDocument::new("test".into(), MapSource::Kit(PathBuf::new()), Some(m), Arc::new(placed), None, db)
 }
 fn changed(d: &mut MapDocument) {
+    bind(d);
     let mut stroke = wce_terrain::lf_edit::LfStroke::default();
     stroke.set(d.lf_field_mut(LfRole::Land).unwrap(), 64, 64, 10200);
     let record = stroke.finish(d.lf_field(LfRole::Land).unwrap()).unwrap();
@@ -254,6 +262,7 @@ fn autosave_round_trip_retains_owned_target_until_successful_project_save() {
     let recovered_map = MapDocument::complete_autosave(&recovery).unwrap();
     let mut restored = doc(built::read("test", &MapFiles::from_dir(&recovered_map).unwrap()).unwrap());
     restored.save_dir = Some(owned.clone());
+    restored.restore_authoring(&recovery).unwrap();
     restored.restored_from = Some(recovery.clone());
     restored.observe_save_destination().unwrap();
     assert_eq!(restored.lf_field(LfRole::Land).unwrap().to_le_rows(), before.5);
@@ -333,6 +342,7 @@ fn partial_publication_keeps_lf_baseline_and_ordinary_retry_regenerates_normals(
         let mut d = doc(m);
         d.save_dir = Some(dir.0.clone());
         d.history_mut().mark_saved();
+        bind(&mut d);
         let mut stroke = wce_terrain::lf_edit::LfStroke::default();
         stroke.set(d.lf_field_mut(LfRole::Land).unwrap(), 64, 64, 10200);
         let record = stroke.finish(d.model().unwrap().lf(LfRole::Land).unwrap().get()).unwrap();
@@ -370,27 +380,7 @@ fn partial_publication_keeps_lf_baseline_and_ordinary_retry_regenerates_normals(
     }
 }
 fn wce_tile_io_for_test_dds(pixels: &[u8]) -> Vec<u8> {
-    let mut b = vec![0u8; 128];
-    b[..4].copy_from_slice(b"DDS ");
-    for (at, value) in [
-        (4, 124u32),
-        (8, 0x100f),
-        (12, 256),
-        (16, 256),
-        (20, 1024),
-        (76, 32),
-        (80, 0x41),
-        (88, 32),
-        (92, 0x00ff0000),
-        (96, 0x0000ff00),
-        (100, 0x000000ff),
-        (104, 0xff000000),
-        (108, 0x1000),
-    ] {
-        b[at..at + 4].copy_from_slice(&value.to_le_bytes());
-    }
-    b.extend_from_slice(pixels);
-    b
+    wce_tile_io::attila::bob_tile::dds_dxt5(pixels, 256, 256)
 }
 
 mod freshness {
