@@ -1,0 +1,233 @@
+{
+  "status": "implemented locally; Phase 4 owner acceptance pending",
+  "branch": "feature/native-battle-baseline",
+  "tested_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+  "foundation": {
+    "save_export": "4c4351e2eb5a9e969c7a7a83b5eda68149957b06",
+    "v9_guards": "c91f91005fabc84a8c6338fe1eb80340c8abc58f",
+    "composition": "dbc40166bd8cc0f098cb71b335ecd9772870c6e4",
+    "upstream_assessed": "1786457a4f671e1336775a09cfb89910b8da4791"
+  },
+  "prototype_reconciliation": {
+    "tested": "aae161ccb71cda69ad9f760e65e5ff45b4d792fb",
+    "final": "1e01a61b44b1e97b62695ab31ec44d9746dd7ded",
+    "difference": [
+      "docs/investigations/fb_phase3/comparison.tsv",
+      "docs/investigations/fb_phase3/cost.tsv",
+      "docs/investigations/fb_phase3/descriptor_example.txt",
+      "docs/investigations/fb_phase3/identities.json",
+      "docs/investigations/fb_phase3_persistent_baseline.md"
+    ],
+    "rust_or_manifest_changes": false
+  },
+  "fixture": {
+    "lf_dimensions": [
+      192,
+      192
+    ],
+    "battle_cells": [
+      48,
+      48
+    ],
+    "source": {
+      "lf_height_map.dds": {
+        "bytes": 73880,
+        "sha256": "0646a7af6c55d0ecc315c3bcfc20aa6e928c73aece05c75759daa248a2bb7cf4"
+      },
+      "lf_height_map.data": {
+        "bytes": 1300,
+        "sha256": "a93aea5a8719868ab61ed5e2dc34b9309f108da165cb92ff6bea132f2aa2d7b0"
+      },
+      "normals/normal_0.dds": {
+        "bytes": 87520,
+        "sha256": "21811002f13d2ab5e540d38bb483fc420956ea92f993cfcbdd4cd2760062c7c6"
+      },
+      "terrain.tile_list": {
+        "bytes": 85,
+        "sha256": "db19aab6f993a5f21e640f53542b14f668ee34392b4fea21b132c2f4ddc0dd03"
+      },
+      "opaque.bin": {
+        "bytes": 34,
+        "sha256": "6967b565b2a015a8c5e2072ce8d35fc9be4118eebd5734ba18405a4eb5457b10"
+      }
+    },
+    "baseline_id": "4e620d1c2be763c206cfb7b863e88852069e373af6db4533012d16706f416414",
+    "calculation_encoder_identity": "native-delta-dxt5-1:309e35190f250d12dee659f7667efe623d08e2bd24b27fa8cc8b253d2cc28cf0:c2c1a2702fc719054b6b9e79dd936bac266033ceb11736c886941b2c492526af:bf6a7d42759742a7a542d25fa89a010a1d5a3406fae54d14ab51f9e1d1a9d9a0"
+  },
+  "tests": {
+    "passed": 434,
+    "failed": 0,
+    "ignored_existing_opt_in": 8,
+    "fresh_child_additionally_verified": 1
+  },
+  "checks": {
+    "accepted-code-regressions": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "accepted-code-clippy": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "accepted-code-test-clippy": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "accepted-code-callers": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "accepted-code-app": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "accepted-code-cost": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "final-application-smoke": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0
+    },
+    "final-format-check": {
+      "source_commit": "da264468f6449b427ee13ea97b214eb1517d91e6",
+      "exit_code": 0,
+      "workspace_command_windows_error": 206,
+      "equivalent_members_checked": 31
+    }
+  },
+  "normal_algorithms_unchanged": true,
+  "application": {
+    "normal_sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e",
+    "native": {
+      "lf_height_map.data": {
+        "bytes": 1402,
+        "sha256": "9a08e2fcdf54fbcd91e6c9c98fab81f70e2e777cddf5c272af5fd151f7f733c7"
+      },
+      "lf_height_map.dds": {
+        "bytes": 73880,
+        "sha256": "351efedd665a159f15b92457241735446a1b15fd82e8d4e9a775d30f8426785c"
+      },
+      "opaque.bin": {
+        "bytes": 34,
+        "sha256": "6967b565b2a015a8c5e2072ce8d35fc9be4118eebd5734ba18405a4eb5457b10"
+      },
+      "terrain.tile_list": {
+        "bytes": 85,
+        "sha256": "db19aab6f993a5f21e640f53542b14f668ee34392b4fea21b132c2f4ddc0dd03"
+      },
+      "normals/normal_0.dds": {
+        "bytes": 87520,
+        "sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e"
+      }
+    },
+    "runs": [
+      {
+        "label": "continuous",
+        "exit_code": 0,
+        "seconds": 2.297,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "reopened-A",
+        "exit_code": 0,
+        "seconds": 1.364,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "reopened-B",
+        "exit_code": 0,
+        "seconds": 1.353,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "kept-open",
+        "exit_code": 0,
+        "seconds": 1.379,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "relocated",
+        "exit_code": 0,
+        "seconds": 1.306,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "autosave-create",
+        "exit_code": 0,
+        "seconds": 1.354,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "autosave-restore",
+        "exit_code": 0,
+        "seconds": 1.456,
+        "errors": [],
+        "expected_save_prompts": 2
+      },
+      {
+        "label": "blocked-recovery",
+        "exit_code": 0,
+        "seconds": 1.305,
+        "errors": [],
+        "expected_save_prompts": 0
+      }
+    ],
+    "costs": [
+      {
+        "project": "continuous",
+        "payload_bytes": 162700,
+        "record_bytes": 932,
+        "total_bytes": 163632
+      },
+      {
+        "project": "reopened",
+        "payload_bytes": 162700,
+        "record_bytes": 932,
+        "total_bytes": 163632
+      },
+      {
+        "project": "recovery-owner",
+        "payload_bytes": 162700,
+        "record_bytes": 932,
+        "total_bytes": 163632
+      }
+    ],
+    "foreground": false,
+    "synthetic": true,
+    "game_runtime_certification": false,
+    "exe_sha256": "b2caa10b5238fbec424df39710425c03f86a65f549e5d136a4ebd3151d882a79"
+  },
+  "small_fixture_heap_measurement": {
+    "payload_bytes": 162700,
+    "record_bytes": 932,
+    "bound_idle_allocation_delta": 2040,
+    "context_metadata_capacity_bytes": 1849,
+    "writer_peak_extra_heap_bytes": 1342700,
+    "save_peak_extra_heap_bytes": 1417686,
+    "normal_sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e"
+  },
+  "large_geometry_arithmetic_only": {
+    "lf_dimensions": [
+      8128,
+      5748
+    ],
+    "normal_chunks": 736,
+    "encoded_normal_chunk_bytes": 442640,
+    "lf_plus_normals_bytes": 419222656,
+    "chmf_and_metadata_additional": true,
+    "full_size_measurement_performed": false
+  },
+  "preservation_audit": {
+    "preexisting_ref_count": 61,
+    "changed_preexisting_refs": 0,
+    "only_added_ref": "refs/heads/feature/native-battle-baseline",
+    "published": false
+  }
+}

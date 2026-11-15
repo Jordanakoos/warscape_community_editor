@@ -10,7 +10,7 @@ Read this handover, then the relevant part of the roadmap. Reuse the existing [m
 
 ## Availability and accepted revisions
 
-Acceptance, publication and upstream merge are separate states. This feature branch starts directly from verified upstream master and includes its publication infrastructure. Upstream autosave/recovery is retained; restored documents stay unsaved after Save As or failure until successful owned Save. Paths marked **local** below refer to the named accepted revision and may not exist in this checkout; inspect them with `git show <revision>:<repository-path>`, obtaining missing Git objects through the contribution owner. No private report or game-resource archive is required.
+Acceptance, publication and upstream merge are separate states. This F-B branch composes the accepted self-contained Terrain Save/Export and v9 guard foundations; current upstream was assessed separately. Its publication infrastructure comes from the accepted Save composition. Upstream autosave/recovery is retained; restored documents stay unsaved after Save As or failure until successful owned Save. Paths marked **local** below refer to the named accepted revision and may not exist in this checkout; inspect them with `git show <revision>:<repository-path>`, obtaining missing Git objects through the contribution owner. No private report or game-resource archive is required.
 
 | Capability | Upstream at the revision above | Accepted local boundary / delivery status |
 |---|---|---|
@@ -29,7 +29,7 @@ Acceptance, publication and upstream merge are separate states. This feature bra
 
 The earlier native-prop milestone is `1ac29cd3a678cdd6054d974552732e1658b42909`; accepted Attila F1/F2 integration is `35c4f358754f6841dd7ad00f4b8b13ad732669e8`. These are provenance landmarks, not recommended upstream bases. D3E is independently based on F1 and does **not** contain all D3C work. Its D3C compatibility composition is a test witness, not a delivery prerequisite.
 
-Height-only preparation [#52](https://github.com/MrJox/warscape_community_editor/pull/52) remains **held**, although GitHub lists it open. D3C contains that work transitively through campaign authoring. Do not import the whole integration to get validation or Save: check module/type/build dependencies as well as runtime calls. Work 3 owns feature packaging and coordination with Frodo/Victimized. New submissions are paused pending review; this handover authorizes no publication or history restructuring.
+Height-only preparation [#52](https://github.com/MrJox/warscape_community_editor/pull/52) remains **held**, although GitHub lists it open. D3C contains that work transitively through campaign authoring. Do not import the whole integration to get validation or Save: check module/type/build dependencies as well as runtime calls. Work 3 owns feature packaging and coordination with Frodo/Victimized. F-B remains local for independent review; Work 3 continues managing feature publication independently. This handover authorizes no publication or history restructuring.
 
 ## Architecture and source map
 
