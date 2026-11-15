@@ -16,6 +16,7 @@
 //! alone does not give: with them kept, 110 of its 111 maps' CHMFs come out byte for byte from their DDS, `built_lf_check`). A shipped
 //! CHMF of another region layout is kept as it was (`settlement_preset`). ASSUMPTION: a lowered region keeps its old tag maximum.
 
+pub mod baseline;
 pub mod scene;
 
 use std::collections::BTreeMap;
@@ -137,16 +138,37 @@ pub fn chmf(field: &PagedU16, cells: (u32, u32), shipped: Option<&[u8]>) -> Opti
 ///
 /// An original file can't be read, or edited v9 placements fail the metadata-integrity guard.
 pub fn write(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>) -> Result<MapFiles> {
-    write_for(m, db, false)
+    write_for(m, db, false, None, false)
 }
 
 /// Project Save must not claim persistence of scene metadata absent from the native project files.
 /// Publication and filesystem ownership remain the caller's responsibility.
 pub fn write_project(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>) -> Result<MapFiles> {
-    write_for(m, db, true)
+    write_for(m, db, true, None, false)
 }
 
-fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>, project: bool) -> Result<MapFiles> {
+/// Production native writer: exactly one normal calculation, against immutable B0.
+pub fn write_baseline(
+    m: &MapModel,
+    db: Option<&wce_tile::battle_map::tile_db::TileDatabase>,
+    project: bool,
+    baseline: &baseline::Baseline,
+) -> Result<MapFiles> {
+    baseline.check_model(m).map_err(|e| file_error(LF, e))?;
+    write_for(m, db, project, Some(baseline), false)
+}
+/// Recovery drafts preserve editable LF samples without manufacturing an
+/// unverifiable normal lineage. They must never be exported as a compiled map.
+pub fn write_draft(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDatabase>, project: bool) -> Result<MapFiles> {
+    write_for(m, db, project, None, true)
+}
+fn write_for(
+    m: &MapModel,
+    db: Option<&wce_tile::battle_map::tile_db::TileDatabase>,
+    project: bool,
+    baseline: Option<&baseline::Baseline>,
+    draft: bool,
+) -> Result<MapFiles> {
     let scene = scene::plan(m, project)?;
     let mut folder: BTreeMap<String, Blob> = m.carried.clone();
     crate::campaign_props::write(m, &mut folder)?;
@@ -181,8 +203,9 @@ fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
             folder.insert(t.path.clone(), blob);
         }
     }
-    for (_, item) in &m.lf {
-        if !item.edited() {
+    for (role, item) in &m.lf {
+        let base = baseline.filter(|_| *role == LfRole::Land);
+        if !item.edited() && base.is_none() {
             folder.insert(item.path.clone(), item.origin.clone());
             continue;
         }
@@ -194,6 +217,24 @@ fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
         dds.extend_from_slice(origin.get(128 + f.width() as usize * f.height() as usize * 2..).unwrap_or_default());
         folder.insert(item.path.clone(), Blob::Bytes(Arc::from(dds)));
 
+        if draft {
+            continue;
+        }
+        let origin = base.map(|b| b.files[LF].clone()).unwrap_or(origin);
+        if let Some(b) = base {
+            // Begin with ALL original encoded chunks, including every mip and
+            // untouched chunk. Undo/return-to-original restores B0 verbatim.
+            for (key, bytes) in &b.files {
+                if baseline::normal(key) || key == CHMF {
+                    let key = folder.keys().find(|k| k.eq_ignore_ascii_case(key)).cloned().unwrap_or_else(|| key.clone());
+                    folder.insert(key, Blob::Bytes(bytes.clone()));
+                }
+            }
+            let n = f.width() as usize * f.height() as usize * 2;
+            if origin.get(128..128 + n) == Some(f.to_le_rows().as_slice()) {
+                continue;
+            }
+        }
         // The LF normal chunks the edit reaches, from the shipped ones (docs/formats/map_files.md: Rome 2 has no `normal.dds`).
         if let Some(cells) = cells(m) {
             let n = f.width() as usize * f.height() as usize;
@@ -202,13 +243,12 @@ fn write_for(m: &MapModel, db: Option<&wce_tile::battle_map::tile_db::TileDataba
                 .map(|b| b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect())
                 .unwrap_or_default();
             let chunk_name = |i: i64| format!("normals/normal_{i}.dds");
-            let count = m
-                .carried
+            let count = folder
                 .keys()
                 .filter(|k| k.to_ascii_lowercase().starts_with("normals/normal_") && k.to_ascii_lowercase().ends_with(".dds"))
                 .count();
             let shipped = |i: i64| {
-                m.carried.iter().find(|(k, _)| k.eq_ignore_ascii_case(&chunk_name(i))).and_then(|(_, b)| b.bytes().ok()).map(|b| b.to_vec())
+                folder.iter().find(|(k, _)| k.eq_ignore_ascii_case(&chunk_name(i))).and_then(|(_, b)| b.bytes().ok()).map(|b| b.to_vec())
             };
             for (name, bytes) in crate::attila::normals::edited_shipped_chunks(f, &original, cells, count, &shipped) {
                 let key = folder.keys().find(|k| k.eq_ignore_ascii_case(&name)).cloned().unwrap_or(name);
