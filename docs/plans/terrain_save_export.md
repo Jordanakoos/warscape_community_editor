@@ -1,6 +1,6 @@
 # Reliable Terrain Save and Export
 
-Complete-output staging, freshness checks and native scene preservation for the Terrain Editor, with the required shared publication implementation and tests included directly. No unmerged #51 branch is required; upstream Tile I/O is unchanged. This feature adds no Tile Editor Save/conversion, campaign-height preparation or persisted normal-baseline format. See the [developer handover](../terrain_editor_handover.md) and [Terrain roadmap](terrain_editor.md).
+Complete-output staging, freshness checks and native scene preservation for the Terrain Editor, with the required shared publication implementation and tests included directly. No unmerged #51 branch is required; upstream Tile I/O is unchanged. The original Save contribution adds no Tile Editor Save/conversion or campaign-height preparation. This local F-B composition additionally implements the separate [native battle authoring-context contract](../formats/terrain_authoring.md); it does not change the accepted Save publication branch. See the [developer handover](../terrain_editor_handover.md) and [Terrain roadmap](terrain_editor.md).
 
 ## Usage
 
@@ -37,7 +37,7 @@ Publication is **per-file stage-and-rename**, not a whole-directory transaction.
 
 Keep the document open, release Busy/permission conflicts, review genuine external changes and retry normally. Own successful publications are recognized, avoiding false stale-source warnings. Terrain ordering publishes supporting resources first, then CHMF, preview/full LF and authoring metadata; the pack is last. A live cache retains certain original normal inputs if normals publish before their LF baseline, supporting the tested retry/independent-copy path without applying the same adjustment twice.
 
-**Continuity limitation:** the cache is not persisted. Repeated native LF edits, close/reopen and process/power-failure recovery have no newly established normal-baseline continuity contract. No baseline sidecar/persistence implementation is included. Retain a known original generation when evaluating those cases. This limitation is separate from the tested single-operation, open-document retry behavior.
+**Native battle continuity in this local composition:** the [persistent authoring context](../formats/terrain_authoring.md) supplies verified immutable original LF/normal/CHMF inputs to the writer. Save, reopen, Export, authoring-aware copies and autosave restoration retain that baseline; missing or unverifiable authority refuses LF-affecting compilation. Standalone Save As copies carry native resources only. This remains per-file publication, not a power-loss transaction or a general native-format correctness claim. This limitation is separate from the tested single-operation, open-document retry behavior.
 
 Copies retain the active folder's observations and outstanding overwrite choice. A copy cannot approve an unrelated populated active folder. Repeat Save and Undo/Redo remain relative to the owned Save generation.
 

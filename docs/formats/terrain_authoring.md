@@ -51,7 +51,7 @@ Missing/corrupt originals refuse compiled Save/Export before native replacement.
 
 Ordinary **Save As remains a standalone native copy**, without retargeting or clearing dirty history. It is usable by the game, but its native files alone do not carry authoring continuity. **Save authoring-aware copy** also copies the verified baseline and creates a destination-owned entry, while leaving the source document and dirty state intact. Moving that complete owner root is portable; moving only its native directory is not.
 
-Autosaves use the existing native `map/` draft and reference protocol. A separate `terrain-authoring.ref` in the recovery slot records the durable authoring owner, baseline identity and initially opened LF fingerprint. It does not duplicate original payloads into every slot. Restoring resolves the original durable owner and retains the existing overwrite prompt. Missing originals still allow an editable recovery draft; they do not grant permission to compile normals. Repeated recovery copies copy session-local native inputs before the previous session can be removed.
+Autosaves use the existing native `map/` draft and reference protocol. A separate `terrain-authoring.ref` in the recovery slot records the durable authoring owner, baseline identity and initially opened LF fingerprint. Unchanged original normal chunks use the existing reference mechanism against the pinned baseline store, avoiding a full original normal-set copy per slot; modified encoded chunks and editable LF samples remain in the draft. Recovery materializes referenced files through the existing protocol when opened. Restoring resolves the original durable owner and retains the existing overwrite prompt. Missing originals still allow an editable recovery draft; they do not grant permission to compile normals. Repeated recovery copies copy session-local native inputs before the previous session can be removed.
 
 ## Entry points and limits
 
@@ -64,12 +64,18 @@ terrain_project_copy <owner-root>
 terrain_save_copy <standalone-native-folder>
 terrain_baseline_adopt
 terrain_baseline_recover <recorded-original-native-folder>
+terrain_baseline_recover_packs
+terrain_save_answer overwrite|cancel
 terrain_recovery_copy <slot>
 terrain_recovery_open <slot>
 ```
 
 Normal `save`, File Save As, `terrain_export`, Undo/Redo and the existing autosave commands continue to use production document paths. Creating a project or adopting legacy data explicitly selects the start of a new lineage. Recovery never makes that choice implicitly.
 
-Supported scope is built/native battle terrain for the Attila and Rome II profiles and layouts recognized by the existing shipped-chunk updater. Unsupported LF-affecting operations refuse without discarding edits; recovery drafts retain their samples. Raw/kit terrain and campaign workflows retain their existing behavior. Historical originals of arbitrary legacy projects cannot be reconstructed by this mechanism. Direct automatic searches across historical pack versions, global baseline deduplication, version migration, directory transactions and campaign-normal reconstruction are outside this change.
+Supported scope is built/native battle terrain for the Attila and Rome II profiles and layouts recognized by the existing shipped-chunk updater. Unsupported LF-affecting operations refuse without discarding edits; recovery drafts retain their samples. Raw/kit terrain and campaign workflows retain their existing behavior. Historical originals of arbitrary legacy projects cannot be reconstructed by this mechanism. Recovery can verify the currently mounted effective pack sources, but never guesses historical pack versions. Automatic historical-source searches, global baseline deduplication, version migration, directory transactions and campaign-normal reconstruction are outside this change.
 
 Implementation: `wce_terrain_io::built::{baseline, write_baseline}`, `wce_terrain_editor::{authoring, document}`, `wce_terrain_tool::{tool::authoring, export}`. Permanent synthetic continuity tests live in `wce_terrain_editor::baseline_tests`; hashing vectors live beside the baseline fingerprint implementation.
+
+## Reproduction
+
+Run `cargo test --release -p wce_terrain_editor baseline_tests` for the permanent regression (including its fresh-process child). `cargo run --release -p wce_terrain_editor --example native_baseline_cost -- <new-root>` generates the shared synthetic source at `<new-root>/source` and records bounded heap/storage costs. Build `wce_app`, set `WCE_FB_SMOKE_GAME` to the installed Rome II directory and `WCE_FB_SMOKE_CACHE` to an existing cache, then run `python scripts/terrain_native_baseline_smoke.py <wce-executable> <synthetic-source> <new-output-root>`. The script creates only independent synthetic outputs, runs non-activating and ends every session with `quit`. It verifies the original Phase 1 hash, LF/CHMF equality, copies/relocation, Export, real autosave restoration and Cancel/Overwrite behavior.

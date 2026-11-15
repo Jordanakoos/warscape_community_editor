@@ -141,6 +141,9 @@ impl Baseline {
             let d = wce_formats::dds_decode::dds_info(bytes);
             if i == 0 {
                 side = d.width;
+                if super::super::attila::normals::Layout::of(count, i64::from(side), i64::from(w), i64::from(h)).is_none() {
+                    return Err("unsupported native normal layout".into());
+                }
             }
             if d.width != side || d.height != side || d.format != "DXT5" || d.mips == 0 || d.mips > 32 {
                 return Err("unsupported normal encoding".into());
@@ -250,6 +253,20 @@ impl Context {
     pub fn resource_dir(&self) -> PathBuf {
         self.root.join("authoring/terrain/baselines").join(&self.descriptor.id)
     }
+    /// Recovery slots may refer to pinned original encoded chunks rather than
+    /// copy all untouched normals on every autosave. Editable LF samples always
+    /// remain in the recovery draft, independently of baseline availability.
+    pub fn original_normal_ref(&self, key: &str, bytes: &[u8]) -> Option<PathBuf> {
+        if !normal(key) {
+            return None;
+        }
+        let e = self.descriptor.entries.iter().find(|e| e.key.eq_ignore_ascii_case(key))?;
+        if e.len != bytes.len() || e.hash != digest(bytes) {
+            return None;
+        }
+        let path = self.resource_dir().join(&e.key);
+        (fs::metadata(&path).ok()?.len() == e.len as u64).then_some(path)
+    }
     fn encode(native: &str, desc: &Descriptor, generation: &[Entry]) -> Arc<[u8]> {
         Arc::from(
             format!("WCE-TERRAIN-CONTEXT-1\n{native}\n{}\n{}\n--generation--\n{}", desc.id, desc.body, entries_text(generation))
@@ -257,6 +274,8 @@ impl Context {
         )
     }
     pub fn create(root: &Path, map: &str, native: &str, b: &Baseline) -> Result<Self, String> {
+        let root = std::path::absolute(root).map_err(|e| e.to_string())?;
+        let root = root.as_path();
         let record_path = Self::record_path(root, map)?;
         let native_dir = resource_path(root, native)?;
         let authoring = wce_foundation::save_path::key(&root.join("authoring"))?;
@@ -294,6 +313,8 @@ impl Context {
         Ok(context)
     }
     pub fn open(root: &Path, map: &str) -> Result<Self, String> {
+        let root = std::path::absolute(root).map_err(|e| e.to_string())?;
+        let root = root.as_path();
         let path = Self::record_path(root, map)?;
         if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 2 * 1024 * 1024 {
             return Err("oversized authoring context".into());
@@ -339,7 +360,12 @@ impl Context {
             let b = if e.key == LF {
                 m.lf(LfRole::Land).ok_or("missing LF")?.origin.bytes()
             } else {
-                m.carried.get(&e.key).ok_or("missing published height-family resource")?.bytes()
+                m.carried
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(&e.key))
+                    .ok_or("missing published height-family resource")?
+                    .1
+                    .bytes()
             }
             .map_err(|e| e.to_string())?;
             if b.len() != e.len || digest(&b) != e.hash {
@@ -388,7 +414,44 @@ impl Context {
         let baseline = Baseline::capture(donor, &self.descriptor.game)?;
         // Verify the COMPLETE donor before changing any stored resource.
         self.persist_resources(&baseline, true)?;
+        drop(baseline);
         self.resolve().map(|_| ())
+    }
+    /// Recover from an existing source provider (for example effective game
+    /// packs). Names/provenance alone are insufficient: every encoded byte is
+    /// verified against the retained descriptor before any repair is staged.
+    pub fn recover_with(&self, mut read: impl FnMut(&str) -> Result<Vec<u8>, String>) -> Result<(), String> {
+        self.check_record()?;
+        let mut files = BTreeMap::new();
+        for e in &self.descriptor.entries {
+            let bytes: Arc<[u8]> = Arc::from(read(&e.key)?);
+            if bytes.len() != e.len || digest(&bytes) != e.hash {
+                return Err(format!("recovery source is not the recorded original: {}", e.key));
+            }
+            files.insert(e.key.clone(), bytes);
+        }
+        let baseline = Baseline { descriptor: self.descriptor.clone(), files };
+        baseline.validate()?;
+        self.check_record()?;
+        self.persist_resources(&baseline, true)?;
+        drop(baseline);
+        self.resolve().map(|_| ())
+    }
+    /// Retained variable-size metadata allocations, excluding allocator headers
+    /// and inline structs. Original payload is loaded only for an operation.
+    pub fn metadata_bytes(&self) -> usize {
+        let entries = |v: &Vec<Entry>| {
+            v.capacity() * std::mem::size_of::<Entry>() + v.iter().map(|e| e.key.capacity() + e.hash.capacity()).sum::<usize>()
+        };
+        self.root.capacity()
+            + self.map.capacity()
+            + self.native.capacity()
+            + self.record.len()
+            + self.descriptor.id.capacity()
+            + self.descriptor.game.capacity()
+            + self.descriptor.body.capacity()
+            + entries(&self.descriptor.entries)
+            + entries(&self.generation)
     }
     pub fn copy_to(&self, root: &Path, native: &str) -> Result<Self, String> {
         Self::create(root, &self.map, native, &self.resolve()?)
@@ -409,9 +472,6 @@ impl Context {
         next.record = record;
         next.generation = generation;
         Ok((output, next))
-    }
-    pub fn game(&self) -> &str {
-        &self.descriptor.game
     }
     pub fn id(&self) -> &str {
         &self.descriptor.id

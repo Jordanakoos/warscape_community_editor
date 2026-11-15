@@ -19,6 +19,8 @@ pub const RECOVERY: &str = "terrain-authoring.ref";
 pub struct Authoring {
     location: Option<Location>,
     initial_lf: Option<String>,
+    expected_id: Option<String>,
+    revision: std::sync::atomic::AtomicU64,
     state: Mutex<State>,
 }
 #[derive(Clone)]
@@ -43,6 +45,8 @@ impl Authoring {
         let applicable = model.is_some_and(|m| m.built && m.kind == MapKind::Battle && m.lf(LfRole::Land).is_some());
         Self {
             location: None,
+            expected_id: None,
+            revision: Default::default(),
             initial_lf: model.and_then(lf_hash),
             state: Mutex::new(if applicable { State::Legacy } else { State::Other }),
         }
@@ -55,6 +59,14 @@ impl Authoring {
         if matches!(*result.state.lock().unwrap(), State::Other) {
             return result;
         }
+        let (root, native) = match (std::path::absolute(root), std::path::absolute(native)) {
+            (Ok(root), Ok(native)) => (root, native),
+            _ => {
+                *result.state.lock().unwrap() = State::Blocked("cannot resolve authoring owner".into());
+                return result;
+            }
+        };
+        let (root, native) = (root.as_path(), native.as_path());
         let rel = match native.strip_prefix(root) {
             Ok(p) => p.to_string_lossy().replace('\\', "/"),
             Err(_) => {
@@ -67,6 +79,7 @@ impl Authoring {
             let path = Context::record_path(root, map)?;
             if path.exists() {
                 let c = Context::open(root, map)?;
+                result.expected_id = Some(c.id().to_owned());
                 c.check_game(game)?;
                 if wce_foundation::save_path::key(native)? != wce_foundation::save_path::key(&c.native_dir())? {
                     return Err("authoring record names a different native destination".into());
@@ -149,18 +162,20 @@ impl Authoring {
         if Context::record_path(&l.root, &l.map)?.exists() {
             return Err("an authoring record already exists; recover it rather than replacing its lineage".into());
         }
+        if let Some(source) = &m.disk_source
+            && wce_foundation::disk_changes::Folder::capture(&source.root)?.files != source.files
+        {
+            return Err("source files changed since Open; reopen before explicit adoption".into());
+        }
         let b = Baseline::capture(m, &l.game)?;
         if Some(b.original_lf_hash()) != self.initial_lf {
             return Err("source LF changed since Open; reopen before explicit adoption".into());
         }
         *state = State::Bound(Context::create(&l.root, &l.map, &l.native, &b)?);
+        self.revision.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
     pub fn accept_completion(&self, c: Context) {
-        *self.state.lock().unwrap() = State::Bound(c);
-    }
-    pub fn set_context(&mut self, c: Context) {
-        self.location = Some(Location { root: c.root.clone(), map: c.map.clone(), game: c.game().into(), native: c.native.clone() });
         *self.state.lock().unwrap() = State::Bound(c);
     }
     /// A recovery record contains a durable-owner reference plus the initially
@@ -176,7 +191,7 @@ impl Authoring {
                 l.map.clone(),
                 l.game.clone(),
                 l.native.clone(),
-                context.ok().flatten().map(|c| c.id().to_owned()).unwrap_or_default(),
+                context.ok().flatten().map(|c| c.id().to_owned()).or_else(|| self.expected_id.clone()).unwrap_or_default(),
             )
         } else {
             (String::new(), String::new(), String::new(), String::new(), String::new())
@@ -196,6 +211,7 @@ impl Authoring {
         }
         let mut result = Self::new(Some(m));
         result.initial_lf = (!v[6].is_empty()).then(|| v[6].into());
+        result.expected_id = (!v[5].is_empty()).then(|| v[5].into());
         if !v[1].is_empty() {
             let l = Location { root: PathBuf::from(v[1]), map: v[2].into(), game: v[3].into(), native: v[4].into() };
             let state = if v[5].is_empty() {
@@ -233,6 +249,9 @@ impl Authoring {
         }
         Ok(())
     }
+    pub fn map_key(&self) -> Option<&str> {
+        self.location.as_ref().map(|l| l.map.as_str())
+    }
     pub fn owned_dir(&self) -> Option<PathBuf> {
         self.location.as_ref().map(|l| l.root.join(&l.native))
     }
@@ -240,11 +259,47 @@ impl Authoring {
         let l = self.location.as_ref().ok_or("no authoring owner")?;
         let c = Context::open(&l.root, &l.map)?;
         c.check_game(&l.game)?;
+        if self
+            .context()
+            .ok()
+            .flatten()
+            .map(|c| c.id().to_owned())
+            .or_else(|| self.expected_id.clone())
+            .as_ref()
+            .is_some_and(|id| id != c.id())
+        {
+            return Err("authoring baseline identity changed; reopen before recovery".into());
+        }
         c.recover(donor)?;
         c.resolve()?.check_model(m)?;
         // Deliberate reconciliation of a partial native publication is safe:
         // subsequent output is recomputed from B0 and this document's final LF.
         *self.state.lock().unwrap() = State::Bound(c);
+        self.revision.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+    pub fn recover_with(&self, m: &MapModel, read: impl FnMut(&str) -> Result<Vec<u8>, String>) -> Result<(), String> {
+        let l = self.location.as_ref().ok_or("no authoring owner")?;
+        let c = Context::open(&l.root, &l.map)?;
+        c.check_game(&l.game)?;
+        if self
+            .context()
+            .ok()
+            .flatten()
+            .map(|c| c.id().to_owned())
+            .or_else(|| self.expected_id.clone())
+            .as_ref()
+            .is_some_and(|id| id != c.id())
+        {
+            return Err("authoring baseline identity changed; reopen before recovery".into());
+        }
+        c.recover_with(read)?;
+        c.resolve()?.check_model(m)?;
+        *self.state.lock().unwrap() = State::Bound(c);
+        self.revision.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

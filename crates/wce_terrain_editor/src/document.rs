@@ -226,10 +226,17 @@ impl MapDocument {
             }
         })?;
         self.authoring.save_recovery(dir)?;
+        let context = self.authoring.context().ok().flatten();
         let map = dir.join(AUTOSAVE_MAP);
         let mut refs = String::new();
         for (rel, blob) in &files.folder {
             let to = map.join(rel);
+            if let wce_tile_model::Blob::Bytes(bytes) = blob
+                && let Some(path) = context.as_ref().and_then(|c| c.original_normal_ref(rel, bytes))
+            {
+                refs += &format!("{rel}\t{}\n", path.display());
+                continue;
+            }
             let inside_copy = |src: &Path| self.restored_from.as_deref().is_some_and(|r| src.starts_with(r));
             match blob {
                 // A file of a restored copy goes when the session ends: copied, not referred to.
@@ -480,6 +487,9 @@ impl Document for MapDocument {
         })
     }
 
+    fn autosave_stamp(&self) -> u64 {
+        self.history.version().wrapping_add(self.authoring.revision())
+    }
     fn autosave(&mut self, dir: &Path) -> Result<(), String> {
         self.autosave_to(dir)
     }
@@ -838,21 +848,26 @@ impl MapDocument {
         Ok(())
     }
     pub fn save_authoring_copy(&mut self, root: &Path) -> Result<(), String> {
+        let lease = self.begin_io()?;
         let context = self.authoring.context()?.ok_or("adopt a native baseline before making an authoring-aware copy")?;
         let native = format!("native/{}", context.map);
         let copy = context.copy_to(root, &native)?;
-        self.save_native_context(&SaveTarget { path: copy.native_dir() }, false, Some(copy))
+        self.save_native_context(&SaveTarget { path: copy.native_dir() }, false, Some(copy), Some(lease))
     }
     fn save_native(&mut self, target: &SaveTarget, overwrite: bool) -> Result<(), String> {
-        self.save_native_context(target, overwrite, None)
+        self.save_native_context(target, overwrite, None, None)
     }
     fn save_native_context(
         &mut self,
         target: &SaveTarget,
         overwrite: bool,
         copy: Option<wce_terrain_io::built::baseline::Context>,
+        lease: Option<wce_foundation::operation::Lease>,
     ) -> Result<(), String> {
-        let _lease = self.begin_io()?;
+        let _lease = match lease {
+            Some(lease) => lease,
+            None => self.begin_io()?,
+        };
         let dir = if target.path.as_os_str().is_empty() {
             self.save_dir.clone().ok_or("no projects folder to save into")?
         } else {
@@ -871,11 +886,12 @@ impl MapDocument {
         } else {
             None
         };
-        if let Some(c) = &context {
-            if wce_foundation::save_path::key(&c.native_dir())? != wce_foundation::save_path::key(&dir)? {
-                return Err("native Save destination differs from authoring owner".into());
-            }
+        if let Some(c) = &context
+            && wce_foundation::save_path::key(&c.native_dir())? != wce_foundation::save_path::key(&dir)?
+        {
+            return Err("native Save destination differs from authoring owner".into());
         }
+        let source_context = self.authoring.context()?;
         let completion = context.as_ref().map(|c| c.completion(&files)).transpose()?;
         let metadata = completion.as_ref().map(|(output, _)| output.path.clone());
         let retained = crate::save_validation::preflight(model, &files, &dir)?;
@@ -932,6 +948,9 @@ impl MapDocument {
                         return Err("injected publication failure".into());
                     }
                     *n -= 1;
+                }
+                if let Some(c) = &source_context {
+                    c.check_record()?;
                 }
                 if let Some(c) = &context {
                     c.check_record()?;

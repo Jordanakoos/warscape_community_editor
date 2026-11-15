@@ -16,7 +16,7 @@ use wce_terrain_io::{
         baseline::{Context, digest},
     },
 };
-use wce_tile::battle_map::{context::PlacedMap, tile_db::TileDatabase, tile_list::TileList};
+use wce_tile::battle_map::{context::PlacedMap, tile_db::TileDatabase};
 const LF: &str = "lf_height_map.dds";
 const CHMF: &str = "lf_height_map.data";
 const N: &str = "normals/normal_0.dds";
@@ -49,17 +49,10 @@ impl Drop for Scratch {
         fs::remove_dir_all(path).unwrap();
     }
 }
-pub(crate) fn fixture() -> MapFiles {
-    let mut lf = wce_terrain_io::attila::heights::lf_height_dds(&PagedU16::filled(192, 192, 10000));
-    lf.extend(b"F-B synthetic DDS tail\0\xff");
-    MapFiles::from_bytes([
-        (LF.into(), lf),
-        (CHMF.into(), wce_terrain_io::attila::heights::lf_height_data_rome2(&vec![10000; 192 * 192], 192, 192, (48, 48))),
-        (N.into(), wce_tile_io::attila::bob_tile::dds_dxt5(&[0u8, 180, 255, 130].repeat(256 * 256), 256, 256)),
-        ("terrain.tile_list".into(), TileList { version: 9, is_campaign: false, battle_size: [48, 48], ..Default::default() }.write()),
-        ("opaque.bin".into(), b"F-B untouched synthetic resource\0\xff".to_vec()),
-    ])
-}
+#[path = "../tests/support/native_battle.rs"]
+mod native_fixture;
+pub(crate) use native_fixture::fixture;
+
 fn bytes(f: &MapFiles) -> Files {
     f.folder.iter().map(|(k, b)| (k.clone(), b.bytes().unwrap().to_vec())).collect()
 }
@@ -329,4 +322,169 @@ fn export_writer_uses_same_baseline_and_no_authoring_resources() {
     assert!(exported.folder.keys().all(|k| !k.contains("authoring")));
     let b = d.authoring.context().unwrap().unwrap().resolve().unwrap();
     assert_eq!(b.bytes(), 162700);
+}
+
+#[test]
+fn source_provider_recovery_verifies_every_donor_before_repair_and_advances_autosave_stamp() {
+    let s = Scratch::new();
+    let mut d = project(&s.0);
+    edit(&mut d, &A);
+    let context = d.authoring.context().unwrap().unwrap();
+    let original = bytes(&fixture());
+    fs::remove_file(context.resource_dir().join(CHMF)).unwrap();
+    fs::remove_file(context.resource_dir().join(N)).unwrap();
+    let stamp = d.autosave_stamp();
+    let wrong = d.authoring.recover_with(d.model().unwrap(), |key| {
+        let mut b = original[key].clone();
+        if key == N {
+            b[128] ^= 1;
+        }
+        Ok(b)
+    });
+    assert!(wrong.is_err());
+    assert!(!context.resource_dir().join(CHMF).exists(), "no partial donor acceptance");
+    assert_eq!(d.autosave_stamp(), stamp);
+    d.authoring.recover_with(d.model().unwrap(), |key| Ok(original[key].clone())).unwrap();
+    assert!(d.autosave_stamp() > stamp);
+    save(&mut d);
+    edit(&mut d, &B);
+    assert_eq!(digest(&save(&mut d)[N]), GOLDEN);
+}
+
+#[test]
+fn blocked_reopen_autosave_keeps_original_identity_and_can_be_recovered() {
+    let s = Scratch::new();
+    let mut d = project(&s.0);
+    edit(&mut d, &A);
+    save(&mut d);
+    let context = d.authoring.context().unwrap().unwrap();
+    fs::remove_file(context.resource_dir().join(N)).unwrap();
+    drop(d);
+    let mut d = open(&s.0, false);
+    edit(&mut d, &B);
+    assert!(d.authoring.resolve(d.model().unwrap()).is_err());
+    let slot = s.0.join("blocked-slot");
+    d.autosave_to(&slot).unwrap();
+    assert_eq!(fs::read_to_string(slot.join(crate::authoring::RECOVERY)).unwrap().lines().nth(5), Some(context.id()));
+    drop(d);
+    let path = MapDocument::complete_autosave(&slot).unwrap();
+    let mut d = doc(built::read(MAP, &MapFiles::from_dir(&path).unwrap()).unwrap());
+    d.restore_authoring(&slot).unwrap();
+    d.restored_from = Some(slot);
+    d.observe_save_destination().unwrap();
+    assert!(d.save(&SaveTarget::default()).is_err());
+    d.authoring.recover_with(d.model().unwrap(), |key| Ok(bytes(&fixture())[key].clone())).unwrap();
+    d.save_overwrite(&SaveTarget::default()).unwrap();
+    assert_eq!(digest(&read(&s.0)[N]), GOLDEN);
+}
+
+#[test]
+fn legacy_adoption_rejects_changed_source_and_refreshes_recovery_authority() {
+    let s = Scratch::new();
+    fixture().write_to(&native(&s.0)).unwrap();
+    let mut d = open(&s.0, false);
+    edit(&mut d, &A);
+    let stamp = d.autosave_stamp();
+    let path = native(&s.0).join(N);
+    let original = fs::read(&path).unwrap();
+    fs::write(&path, b"changed after Open").unwrap();
+    assert!(d.authoring.adopt(d.model().unwrap()).is_err());
+    assert_eq!(d.autosave_stamp(), stamp);
+    fs::write(&path, original).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+        .unwrap();
+    // Restoring bytes is not enough to restore the original source stamp.
+    assert!(d.authoring.adopt(d.model().unwrap()).is_err());
+    drop(d);
+    let mut d = open(&s.0, false);
+    edit(&mut d, &A);
+    let stamp = d.autosave_stamp();
+    d.authoring.adopt(d.model().unwrap()).unwrap();
+    assert!(d.autosave_stamp() > stamp);
+    let slot = s.0.join("adopted-slot");
+    d.autosave_to(&slot).unwrap();
+    assert!(!fs::read_to_string(slot.join(crate::authoring::RECOVERY)).unwrap().lines().nth(5).unwrap().is_empty());
+}
+
+#[test]
+fn unknown_pipeline_geometry_and_authoring_destination_refuse_without_native_changes() {
+    let s = Scratch::new();
+    let mut d = project(&s.0);
+    edit(&mut d, &A);
+    let before = read(&s.0);
+    let history = d.history().position();
+    let context = d.authoring.context().unwrap().unwrap();
+    assert!(d.save(&SaveTarget { path: context.resource_dir() }).is_err());
+    assert_eq!(context.resolve().unwrap().bytes(), 162700);
+    *d.lf_field_mut(LfRole::Land).unwrap() = PagedU16::filled(193, 192, 10100);
+    assert!(d.save(&SaveTarget::default()).is_err());
+    assert_eq!(read(&s.0), before);
+    assert_eq!(d.history().position(), history);
+    let record = Context::record_path(&s.0, MAP).unwrap();
+    let saved = fs::read_to_string(&record).unwrap();
+    fs::write(&record, saved.replace("native-delta-dxt5-1", "native-delta-dxt5-999")).unwrap();
+    let d = open(&s.0, false);
+    assert!(d.authoring.resolve(d.model().unwrap()).is_err());
+    assert_eq!(read(&s.0), before);
+}
+
+#[test]
+fn phase1_unbound_counterexample_still_has_identical_lf_chmf_but_different_normals() {
+    let mut c = doc(built::read(MAP, &fixture()).unwrap());
+    edit(&mut c, &A);
+    let intermediate = built::write(c.model().unwrap(), None).unwrap();
+    edit(&mut c, &B);
+    let continuous = bytes(&built::write(c.model().unwrap(), None).unwrap());
+    let mut r = doc(built::read(MAP, &intermediate).unwrap());
+    edit(&mut r, &B);
+    let reopened = bytes(&built::write(r.model().unwrap(), None).unwrap());
+    assert_eq!(continuous[LF], reopened[LF]);
+    assert_eq!(continuous[CHMF], reopened[CHMF]);
+    assert_eq!(digest(&continuous[N]), GOLDEN);
+    assert_ne!(continuous[N], reopened[N]);
+}
+
+#[test]
+fn autosave_refs_original_normal_payload_without_moving_its_owner() {
+    let s = Scratch::new();
+    let mut d = project(&s.0);
+    let original = read(&s.0);
+    edit(&mut d, &A);
+    save(&mut d);
+    assert!(d.history_mut().undo());
+    let slot = s.0.join("slot");
+    d.autosave_to(&slot).unwrap();
+    assert!(slot.join("map").join(LF).is_file(), "retain editable LF independently");
+    assert!(!slot.join("map").join(N).exists(), "no redundant untouched normal payload per slot");
+    let baseline = d.authoring.context().unwrap().unwrap();
+    let reference = fs::read_to_string(slot.join(crate::document::AUTOSAVE_REFS)).unwrap();
+    assert!(reference.contains(&baseline.resource_dir().join(N).to_string_lossy().into_owned()));
+    let complete = MapDocument::complete_autosave(&slot).unwrap();
+    assert_eq!(bytes(&MapFiles::from_dir(&complete).unwrap()), original);
+    fs::remove_dir_all(slot).unwrap();
+    assert_eq!(baseline.resolve().unwrap().bytes(), 162700);
+}
+
+#[test]
+fn native_resource_spelling_survives_save_and_verified_reopen() {
+    let s = Scratch::new();
+    let mut input = fixture();
+    for (old, new) in [(LF, "LF_Height_Map.DDS"), (CHMF, "LF_Height_Map.DATA"), (N, "Normals/Normal_0.DDS")] {
+        let value = input.folder.remove(old).unwrap();
+        input.folder.insert(new.into(), value);
+    }
+    input.write_to(&native(&s.0)).unwrap();
+    let mut d = open(&s.0, true);
+    edit(&mut d, &A);
+    save(&mut d);
+    drop(d);
+    let mut d = open(&s.0, false);
+    edit(&mut d, &B);
+    let output = save(&mut d);
+    assert_eq!(output.keys().collect::<Vec<_>>(), input.folder.keys().collect::<Vec<_>>());
+    assert_eq!(digest(&output["Normals/Normal_0.DDS"]), GOLDEN);
 }

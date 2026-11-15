@@ -89,6 +89,7 @@ fn write(
     normals: &std::sync::Mutex<std::collections::BTreeMap<String, Arc<[u8]>>>,
     changes: &std::sync::Mutex<wce_foundation::disk_changes::Changes>,
     attempt: wce_foundation::disk_changes::Attempt,
+    context: Option<&wce_terrain_io::built::baseline::Context>,
 ) -> Result<(PathBuf, PathBuf), String> {
     use wce_foundation::publication::{Output, Source, Staged};
     let (game, name) = game_folder(map);
@@ -136,7 +137,12 @@ fn write(
     let attempt = std::cell::RefCell::new(attempt);
     staged
         .publish_checked(
-            |p| attempt.borrow().check_target(p),
+            |p| {
+                if let Some(c) = context {
+                    c.check_record()?;
+                }
+                attempt.borrow().check_target(p)
+            },
             |p| {
                 attempt.borrow_mut().published(p)?;
                 changes.lock().map_err(|e| e.to_string())?.note_owned(p)?;
@@ -160,12 +166,20 @@ pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[Pa
     let lease = d.begin_io()?;
     let folder = out.join(game_folder(&d.name).0);
     d.authoring.check_destination(&folder)?;
-    if let Some(owned) = &d.save_dir
-        && wce_foundation::save_path::key(owned)? == wce_foundation::save_path::key(&folder)?
-    {
-        return Err("native Export needs an independent destination; use Save for the owned map".into());
-    }
     let model = d.publication_model()?;
+    // A filtered native Export cannot safely overwrite its own input map or
+    // authoring store. Independent loose/pack destinations remain unchanged.
+    let pack = out.join(format!("terrain_{}.pack", game_folder(&d.name).1));
+    for native in d.save_dir.iter().chain(model.disk_source.iter().map(|s| &s.root)) {
+        let key = wce_foundation::save_path::key(native)?;
+        let sep = std::path::MAIN_SEPARATOR;
+        for target in [&folder, &pack] {
+            let to = wce_foundation::save_path::key(target)?;
+            if to == key || to.starts_with(&format!("{key}{sep}")) || key.starts_with(&format!("{to}{sep}")) {
+                return Err("native Export needs an independent destination; use Save for the owned map".into());
+            }
+        }
+    }
     let changes = d.io_changes.clone();
     let normals = d.normal_inputs();
     let authoring = d.authoring.clone();
@@ -192,7 +206,8 @@ pub fn start(e: &Editor, doc: DocumentId, db: Arc<TileDatabase>, kit_roots: &[Pa
                 build(&model, &BuildInputs { db: &db, environment_map: &env, tile_upgrades: &upgrades }).map_err(|err| err.to_string())
             })
             .and_then(|b| {
-                let (folder, pack) = write(&out, &name, &b.files, profile, &model, &normals, &changes, attempt)?;
+                let context = authoring.context()?;
+                let (folder, pack) = write(&out, &name, &b.files, profile, &model, &normals, &changes, attempt, context.as_ref())?;
                 Ok(Exported {
                     map: name.clone(),
                     revision,
@@ -265,7 +280,7 @@ mod tests {
         let files = vec![("opaque.bin".into(), b"native bytes".to_vec()), ("lf_height_map.dds".into(), b"LF baseline".to_vec())];
         let run = |files: &[(String, Vec<u8>)]| {
             let attempt = changes.lock().unwrap().begin_export(&root).unwrap();
-            write(&root, "map", files, &wce_vfs::GameProfile::ROME_2, &model, &normals, &changes, attempt)
+            write(&root, "map", files, &wce_vfs::GameProfile::ROME_2, &model, &normals, &changes, attempt, None)
         };
         let (folder, pack) = run(&files).unwrap();
         let old = std::fs::read(folder.join("opaque.bin")).unwrap();

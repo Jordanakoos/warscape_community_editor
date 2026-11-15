@@ -54,6 +54,7 @@ impl TerrainTool {
         };
         let mut d = self.native_document(e, &directory, map)?;
         let target = if source.is_some() { root.join(&native) } else { directory.clone() };
+        ensure_available(e, &target, None)?;
         if source.is_some() {
             let b = Baseline::capture(d.model().unwrap(), e.game().key)?;
             Context::create(root, map, &native, &b)?;
@@ -78,6 +79,19 @@ impl TerrainTool {
     }
 }
 
+fn ensure_available(e: &Editor, target: &Path, except: Option<DocumentId>) -> Result<(), String> {
+    if e.docs.destination_owner(target, except)?.is_some() {
+        Err("authoring copy destination is owned by another open document".into())
+    } else {
+        Ok(())
+    }
+}
+fn copy_project(e: &mut Editor, id: DocumentId, root: &Path) -> Result<(), String> {
+    let d = e.docs.find_as::<MapDocument>(id).ok_or("no Terrain document")?;
+    let map = d.authoring.map_key().ok_or("no native authoring identity")?;
+    ensure_available(e, &root.join("native").join(map), Some(id))?;
+    e.docs.find_as_mut::<MapDocument>(id).unwrap().save_authoring_copy(root)
+}
 fn current(e: &mut Editor) -> Result<&mut MapDocument, String> {
     e.docs.active_mut().and_then(|d| d.as_any_mut().downcast_mut::<MapDocument>()).ok_or("no active Terrain document".into())
 }
@@ -112,7 +126,8 @@ pub(super) fn register(c: &mut CommandRegistry<Editor>) {
         |e, a| {
             result((|| {
                 let root = a.first().ok_or("usage: terrain_project_copy <owner-root>")?;
-                current(e)?.save_authoring_copy(Path::new(root))?;
+                let id = e.docs.active_id();
+                copy_project(e, id, Path::new(root))?;
                 Ok("authoring-aware copy saved; source document retained".into())
             })())
         },
@@ -156,6 +171,34 @@ pub(super) fn register(c: &mut CommandRegistry<Editor>) {
                 d.authoring.recover(&donor, d.model().ok_or("no model")?)?;
                 Ok(d.authoring.status())
             })())
+        },
+    );
+    c.add(
+        "terrain_baseline_recover_packs",
+        "terrain_baseline_recover_packs",
+        "recover only exact recorded originals from the currently mounted effective game packs",
+        |e, _| {
+            result((|| {
+                let files = e.files().ok_or("no mounted game sources")?;
+                let d = current(e)?;
+                let folder = crate::export::game_folder(&d.name).0;
+                let _lease = d.begin_io()?;
+                d.authoring.recover_with(d.model().ok_or("no model")?, |key| files.read(&format!("{folder}/{key}")))?;
+                Ok(d.authoring.status())
+            })())
+        },
+    );
+    c.add(
+        "terrain_save_answer",
+        "terrain_save_answer overwrite|cancel",
+        "answer the existing changed-files Save prompt for the Terrain document",
+        |e, a| {
+            let overwrite = match a.first().map(String::as_str) {
+                Some("overwrite") => true,
+                Some("cancel") => false,
+                _ => return CommandResult::fail("usage: terrain_save_answer overwrite|cancel"),
+            };
+            result(e.docs.answer_changed_save(overwrite))
         },
     );
     c.add(
@@ -230,9 +273,22 @@ pub(super) fn draw(t: &mut TerrainTool, e: &mut Editor, id: DocumentId) {
     if gui::button("Save authoring-aware copy...")
         && let Some(root) = e.pick_export_folder("terrain-authoring-copy", "Save native battle authoring-aware copy")
     {
-        let r = e.docs.find_as_mut::<MapDocument>(id).ok_or("no map".into()).and_then(|d| d.save_authoring_copy(&root));
+        let r = copy_project(e, id, &root);
         match r {
             Ok(()) => e.status("Authoring-aware copy saved; source retained", false),
+            Err(s) => e.status(&s, true),
+        }
+    }
+    if gui::button("Recover from mounted packs") {
+        let r = (|| {
+            let files = e.files().ok_or("no mounted game sources")?;
+            let d = e.docs.find_as::<MapDocument>(id).ok_or("no map")?;
+            let _lease = d.begin_io()?;
+            let folder = crate::export::game_folder(&d.name).0;
+            d.authoring.recover_with(d.model().ok_or("no model")?, |key| files.read(&format!("{folder}/{key}")))
+        })();
+        match r {
+            Ok(()) => e.status("Exact recorded originals recovered from pack sources", false),
             Err(s) => e.status(&s, true),
         }
     }
