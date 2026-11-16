@@ -511,3 +511,6 @@ fn extra_native_normal_chunks_cannot_silently_disable_the_baseline_calculation()
 
 #[path = "baseline_r1_tests.rs"]
 mod r1_corrections;
+
+#[path = "baseline_r1_controls.rs"]
+mod r1_controls;

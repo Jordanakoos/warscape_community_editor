@@ -275,11 +275,15 @@ impl MapDocument {
         let refs = std::fs::read_to_string(copy.join(AUTOSAVE_REFS)).unwrap_or_default();
         for line in refs.lines().filter(|l| !l.is_empty()) {
             let (rel, src) = line.split_once('\t').ok_or_else(|| format!("{AUTOSAVE_REFS}: a bad line: {line}"))?;
-            let to = map.join(rel);
+            let to = wce_foundation::publication::resource_path(&map, rel)?;
+            // LF edits are already in map/. Only a declared pinned original
+            // normal may remain unresolved; restore will keep compilation blocked.
+            if crate::authoring::Authoring::original_recovery_ref(copy, rel, Path::new(src)) && std::fs::File::open(src).is_err() {
+                continue;
+            }
             if let Some(parent) = to.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             }
-
             std::fs::copy(src, &to).map_err(|e| format!("{src}: {e}"))?;
         }
 
@@ -849,10 +853,17 @@ impl MapDocument {
     }
     pub fn save_authoring_copy(&mut self, root: &Path) -> Result<(), String> {
         let lease = self.begin_io()?;
-        let context = self.authoring.context()?.ok_or("adopt a native baseline before making an authoring-aware copy")?;
-        let native = format!("native/{}", context.map);
-        let copy = context.copy_to(root, &native)?;
-        self.save_native_context(&SaveTarget { path: copy.native_dir() }, false, Some(copy), Some(lease))
+        self.authoring.check_copy_owner(root)?;
+        let model = self.model().ok_or("no map model")?;
+        for protected in self.save_dir.iter().chain(model.disk_source.iter().map(|s| &s.root)) {
+            if wce_terrain_io::built::baseline::overlaps(root, protected)? {
+                return Err("authoring copy overlaps a source or current native map".into());
+            }
+        }
+        let source = self.authoring.context()?.ok_or("adopt a native baseline before making an authoring-aware copy")?;
+        let native = format!("native/{}", source.map);
+        let target = source.plan_copy(root, &native)?;
+        self.save_native_context(&SaveTarget { path: target.native_dir() }, false, Some((source, target)), Some(lease))
     }
     fn save_native(&mut self, target: &SaveTarget, overwrite: bool) -> Result<(), String> {
         self.save_native_context(target, overwrite, None, None)
@@ -861,7 +872,7 @@ impl MapDocument {
         &mut self,
         target: &SaveTarget,
         overwrite: bool,
-        copy: Option<wce_terrain_io::built::baseline::Context>,
+        copy: Option<(wce_terrain_io::built::baseline::Context, wce_terrain_io::built::baseline::Context)>,
         lease: Option<wce_foundation::operation::Lease>,
     ) -> Result<(), String> {
         let _lease = match lease {
@@ -879,6 +890,7 @@ impl MapDocument {
         let files = self.authoring.write(&writing, Some(&self.db), true)?;
         let owned = self.save_dir.as_ref().map(|own| wce_foundation::save_path::key(own)).transpose()?
             == Some(wce_foundation::save_path::key(&dir)?);
+        let (copy_source, copy) = copy.map_or((None, None), |(source, target)| (Some(source), Some(target)));
         let context = if let Some(copy) = copy {
             Some(copy)
         } else if owned {
@@ -916,12 +928,20 @@ impl MapDocument {
         let staged = wce_foundation::publication::Staged::prepare(outputs).map_err(|e| e.to_string())?;
         let mut normal_sources = vec![];
         for (key, blob) in &files.folder {
-            if key.to_ascii_lowercase().starts_with("normals/") && matches!(blob,wce_tile_model::Blob::Bytes(_)) && !self.normal_source_bytes.lock().map_err(|e|e.to_string())?.contains_key(key)
+            if source_context.is_none() && !retained.contains(key) && key.to_ascii_lowercase().starts_with("normals/") && matches!(blob,wce_tile_model::Blob::Bytes(_)) && !self.normal_source_bytes.lock().map_err(|e|e.to_string())?.contains_key(key)
                 && let Some(source)=model.carried.get(key).filter(|b|matches!(b,wce_tile_model::Blob::File(p) if wce_foundation::save_path::key(p).ok()==wce_foundation::save_path::key(&dir.join(key)).ok())) {
                 normal_sources.push((key.clone(),source.bytes().map_err(|e|e.to_string())?));
             }
         }
         attempt.borrow().recheck()?;
+        if let Some(source) = copy_source {
+            // Materialize only after all native outputs have staged successfully.
+            // Overlap/representability/freshness refusals above are read-only.
+            let target = context.as_ref().unwrap();
+            target.check_record()?;
+            source.check_record()?;
+            source.materialize_copy(target)?;
+        }
         // Preflight rejection leaves active/history/dirty state untouched. A successful save publishes a completed stroke only.
         self.normal_source_bytes.lock().map_err(|e| e.to_string())?.extend(normal_sources);
         let model = self.model().ok_or("no map model")?;

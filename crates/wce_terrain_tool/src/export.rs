@@ -120,13 +120,17 @@ fn write(
     let staged = Staged::prepare(outputs).map_err(|e| e.to_string())?;
     attempt.recheck()?;
     let mut inputs = normals.lock().map_err(|e| e.to_string())?;
-    for (key, _) in files {
-        if key.to_ascii_lowercase().starts_with("normals/")
+    for (key, bytes) in files {
+        if context.is_none()
+            && key.to_ascii_lowercase().starts_with("normals/")
             && !inputs.contains_key(key)
             && let Some(blob @ wce_tile_model::Blob::File(path)) = model.carried.get(key)
             && wce_foundation::save_path::key(path)? == wce_foundation::save_path::key(&folder.join(key))?
         {
-            inputs.insert(key.clone(), blob.bytes().map_err(|e| e.to_string())?);
+            let original = blob.bytes().map_err(|e| e.to_string())?;
+            if original.as_ref() != bytes.as_slice() {
+                inputs.insert(key.clone(), original);
+            }
         }
     }
     drop(inputs);
@@ -266,6 +270,43 @@ pub fn summary(x: &Exported) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unbound_changed_normal_keeps_the_required_original_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "wce-terrain-export-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let folder = root.join("terrain/battles/map");
+        std::fs::create_dir_all(folder.join("normals")).unwrap();
+        let key = "normals/normal_0.dds";
+        std::fs::write(folder.join(key), b"original encoded normal").unwrap();
+        let mut model = wce_terrain::MapModel::default();
+        model.carried.insert(key.into(), wce_tile_model::Blob::File(folder.join(key)));
+        let normals = std::sync::Mutex::new(Default::default());
+        let changes = std::sync::Mutex::new(wce_foundation::disk_changes::Changes::default());
+        let attempt = changes.lock().unwrap().begin_export(&root).unwrap();
+        write(
+            &root,
+            "map",
+            &[(key.into(), b"changed encoded normal".to_vec())],
+            &wce_vfs::GameProfile::ROME_2,
+            &model,
+            &normals,
+            &changes,
+            attempt,
+            None,
+        )
+        .unwrap();
+        assert_eq!(normals.lock().unwrap()[key].as_ref(), b"original encoded normal");
+        assert_eq!(std::fs::read(folder.join(key)).unwrap(), b"changed encoded normal");
+        let target = root.canonicalize().unwrap();
+        assert!(
+            target.starts_with(std::env::temp_dir().canonicalize().unwrap())
+                && target.file_name().unwrap().to_string_lossy().starts_with("wce-terrain-export-snapshot-")
+        );
+        std::fs::remove_dir_all(target).unwrap();
+    }
     #[test]
     fn step_c_export_stages_pack_and_loose_files_and_retains_exact_content() {
         let root = std::env::temp_dir().join(format!(

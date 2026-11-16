@@ -185,36 +185,47 @@ impl Authoring {
             return Ok(());
         }
         let context = self.context();
-        let (root, map, game, native, id) = if let Some(l) = &self.location {
-            (
-                l.root.to_string_lossy().into_owned(),
-                l.map.clone(),
-                l.game.clone(),
-                l.native.clone(),
-                context.ok().flatten().map(|c| c.id().to_owned()).or_else(|| self.expected_id.clone()).unwrap_or_default(),
-            )
-        } else {
-            (String::new(), String::new(), String::new(), String::new(), String::new())
+        let (decision, reason, id) = match &*self.state.lock().unwrap() {
+            State::Bound(c) => ("verified", String::new(), c.id().to_owned()),
+            State::Blocked(e) => ("blocked", e.clone(), self.expected_id.clone().unwrap_or_default()),
+            State::Pending(b) => {
+                ("blocked", context.err().unwrap_or_else(|| "original baseline is not durably pinned".into()), b.descriptor.id.clone())
+            }
+            _ => ("legacy", String::new(), String::new()),
         };
-        let fields = [root, map, game, native, id, self.initial_lf.clone().unwrap_or_default()];
+        let (root, map, game, native) = self
+            .location
+            .as_ref()
+            .map(|l| (l.root.to_string_lossy().into_owned(), l.map.clone(), l.game.clone(), l.native.clone()))
+            .unwrap_or_default();
+        let reason = reason.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let fields = [root, map, game, native, id, self.initial_lf.clone().unwrap_or_default(), decision.into(), reason];
         if fields.iter().any(|s| s.contains(['\r', '\n'])) {
             return Err("recovery authoring path contains a newline".into());
         }
         fs::create_dir_all(slot).map_err(|e| e.to_string())?;
-        fs::write(slot.join(RECOVERY), format!("WCE-TERRAIN-RECOVERY-1\n{}\n", fields.join("\n"))).map_err(|e| e.to_string())
+        fs::write(slot.join(RECOVERY), format!("WCE-TERRAIN-RECOVERY-2\n{}\n", fields.join("\n"))).map_err(|e| e.to_string())
     }
     pub fn restore(slot: &Path, m: &MapModel) -> Result<Self, String> {
-        let text = fs::read_to_string(slot.join(RECOVERY)).map_err(|e| e.to_string())?;
-        let v: Vec<_> = text.lines().collect();
-        if v.len() != 7 || v[0] != "WCE-TERRAIN-RECOVERY-1" {
-            return Err("unknown terrain recovery authoring record".into());
-        }
+        let v = read_recovery(slot)?;
         let mut result = Self::new(Some(m));
-        result.initial_lf = (!v[6].is_empty()).then(|| v[6].into());
-        result.expected_id = (!v[5].is_empty()).then(|| v[5].into());
+        result.initial_lf = (!v[6].is_empty()).then(|| v[6].clone());
+        result.expected_id = (!v[5].is_empty()).then(|| v[5].clone());
+        let prior_block = if v[0] == "WCE-TERRAIN-RECOVERY-2" && v[7] == "blocked" {
+            let bytes = v[8]
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|c| u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).map_err(|_| "bad recovery refusal encoding"))
+                .collect::<Result<Vec<_>, _>>()?;
+            Some(String::from_utf8(bytes).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         if !v[1].is_empty() {
-            let l = Location { root: PathBuf::from(v[1]), map: v[2].into(), game: v[3].into(), native: v[4].into() };
-            let state = if v[5].is_empty() {
+            let l = Location { root: PathBuf::from(&v[1]), map: v[2].clone(), game: v[3].clone(), native: v[4].clone() };
+            let state = if let Some(reason) = prior_block {
+                State::Blocked(reason)
+            } else if v[5].is_empty() {
                 if Context::record_path(&l.root, &l.map)?.exists() {
                     State::Blocked("recovery refers to an unverifiable existing authoring record; recover explicitly".into())
                 } else {
@@ -226,6 +237,9 @@ impl Authoring {
                     if c.id() != v[5] {
                         return Err("recovery baseline identity changed".into());
                     }
+                    // Check the OWNER, never compare a dirty draft with saved LF.
+                    // This also safely handles old v1 slots with no recorded verdict.
+                    c.check_owner_generation()?;
                     c.resolve()?.check_model(m)?;
                     Ok(c)
                 }) {
@@ -237,6 +251,32 @@ impl Authoring {
             *result.state.lock().unwrap() = state;
         }
         Ok(result)
+    }
+    /// An absent pinned normal is optional for opening an editable draft, but
+    /// not for compiling it. All other source-reference failures remain fatal.
+    pub fn original_recovery_ref(slot: &Path, key: &str, source: &Path) -> bool {
+        let Ok(v) = read_recovery(slot) else {
+            return false;
+        };
+        if v[1].is_empty() || v[5].is_empty() || !built::baseline::normal(key) {
+            return false;
+        }
+        let root = PathBuf::from(&v[1]).join("authoring/terrain/baselines").join(&v[5]);
+        let Ok(expected) = wce_foundation::publication::resource_path(&root, &key.to_ascii_lowercase()) else {
+            return false;
+        };
+        wce_foundation::save_path::key(&expected).ok().zip(wce_foundation::save_path::key(source).ok()).is_some_and(|(a, b)| a == b)
+    }
+    /// Pure preflight: never pin or repair originals inside either input map.
+    pub fn check_copy_owner(&self, root: &Path) -> Result<(), String> {
+        if let Some(l) = &self.location {
+            for protected in [l.root.join(&l.native), l.root.join("authoring")] {
+                if built::baseline::overlaps(root, &protected)? {
+                    return Err("authoring copy overlaps the native map or authoring store".into());
+                }
+            }
+        }
+        Ok(())
     }
     pub fn check_destination(&self, dir: &Path) -> Result<(), String> {
         if let Some(l) = &self.location {
@@ -302,4 +342,37 @@ impl Authoring {
     pub fn revision(&self) -> u64 {
         self.revision.load(std::sync::atomic::Ordering::Relaxed)
     }
+}
+
+fn read_recovery(slot: &Path) -> Result<Vec<String>, String> {
+    let path = slot.join(RECOVERY);
+    if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 65536 {
+        return Err("oversized terrain recovery authoring record".into());
+    }
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: Vec<String> = text.lines().map(str::to_owned).collect();
+    let valid = match v.first().map(String::as_str) {
+        Some("WCE-TERRAIN-RECOVERY-1") => v.len() == 7,
+        Some("WCE-TERRAIN-RECOVERY-2") => v.len() == 9,
+        _ => false,
+    };
+    if !valid {
+        return Err("unknown terrain recovery authoring record".into());
+    }
+    if v.len() == 9
+        && (!matches!(v[7].as_str(), "verified" | "blocked" | "legacy")
+            || v[8].len() % 2 != 0
+            || !v[8].bytes().all(|b| b.is_ascii_hexdigit())
+            || (v[7] == "blocked" && v[8].is_empty())
+            || (v[7] != "blocked" && !v[8].is_empty())
+            || (v[7] == "verified" && v[5].is_empty()))
+    {
+        return Err("invalid terrain recovery authority verdict".into());
+    }
+    for hash in [&v[5], &v[6]] {
+        if !hash.is_empty() && (hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err("invalid terrain recovery identity".into());
+        }
+    }
+    Ok(v)
 }

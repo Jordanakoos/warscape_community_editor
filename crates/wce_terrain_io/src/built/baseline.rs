@@ -8,6 +8,7 @@ use std::{
 };
 use wce_foundation::publication::{Output, Source, Staged, resource_path};
 use wce_terrain::{LfRole, MapKind, MapModel};
+use wce_tile_model::Blob;
 
 mod fingerprint;
 pub use fingerprint::digest;
@@ -246,6 +247,8 @@ pub struct Context {
     pub descriptor: Descriptor,
     record: Arc<[u8]>,
     generation: Vec<Entry>,
+    generation_error: Option<String>,
+    anchor_exists: bool,
 }
 impl Context {
     pub fn record_path(root: &Path, map: &str) -> Result<PathBuf, String> {
@@ -298,6 +301,8 @@ impl Context {
             descriptor: b.descriptor.clone(),
             record: record.clone(),
             generation: vec![],
+            generation_error: None,
+            anchor_exists: true,
         };
         if record_path.exists() {
             let existing = Self::open(root, map)?;
@@ -341,8 +346,22 @@ impl Context {
         if descriptor.id != id {
             return Err("baseline descriptor digest mismatch".into());
         }
-        let generation = if generation.is_empty() { vec![] } else { parse_entries(generation)? };
-        let result = Self { root: root.into(), map: map.into(), native, descriptor, record, generation };
+        // A valid descriptor remains available for explicit original repair,
+        // but malformed/incomplete completion data never grants authority.
+        let parsed = if generation.is_empty() {
+            Ok(vec![])
+        } else {
+            parse_entries(generation).and_then(|entries| {
+                Self::complete_family(&descriptor, &entries)?;
+                Ok(entries)
+            })
+        };
+        let (generation, generation_error) = match parsed {
+            Ok(entries) => (entries, None),
+            Err(e) => (vec![], Some(e)),
+        };
+        let result =
+            Self { root: root.into(), map: map.into(), native, descriptor, record, generation, generation_error, anchor_exists: true };
         let dest = wce_foundation::save_path::key(&result.native_dir())?;
         let authoring = wce_foundation::save_path::key(&root.join("authoring"))?;
         if dest.starts_with(&authoring) || authoring.starts_with(&dest) {
@@ -351,7 +370,15 @@ impl Context {
         Ok(result)
     }
     pub fn check_record(&self) -> Result<(), String> {
-        if fs::read(Self::record_path(&self.root, &self.map)?).map_err(|e| e.to_string())?.as_slice() != self.record.as_ref() {
+        let path = Self::record_path(&self.root, &self.map)?;
+        if !self.anchor_exists {
+            return match fs::metadata(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.to_string()),
+                Ok(_) => Err("authoring context appeared while staging the copy".into()),
+            };
+        }
+        if fs::read(path).map_err(|e| e.to_string())?.as_slice() != self.record.as_ref() {
             return Err("authoring context changed on disk; reopen before saving".into());
         }
         Ok(())
@@ -359,29 +386,54 @@ impl Context {
     pub fn check_game(&self, game: &str) -> Result<(), String> {
         if game == self.descriptor.game { Ok(()) } else { Err("authoring context belongs to another game".into()) }
     }
-    pub fn check_generation(&self, m: &MapModel) -> Result<(), String> {
-        if self.generation.is_empty() {
-            return Ok(());
+    fn complete_family(descriptor: &Descriptor, entries: &[Entry]) -> Result<(), String> {
+        let expected: std::collections::BTreeSet<_> = descriptor.entries.iter().map(|e| e.key.as_str()).collect();
+        let actual: std::collections::BTreeSet<_> = entries.iter().map(|e| e.key.as_str()).collect();
+        if entries.len() != descriptor.entries.len() || actual != expected {
+            return Err("completed generation must contain exactly the complete original height-resource family".into());
         }
-        for e in &self.generation {
-            let b = if e.key == LF {
-                m.lf(LfRole::Land).ok_or("missing LF")?.origin.bytes()
-            } else {
-                m.carried
-                    .iter()
-                    .find(|(key, _)| key.eq_ignore_ascii_case(&e.key))
-                    .ok_or("missing published height-family resource")?
-                    .1
-                    .bytes()
+        Ok(())
+    }
+    fn verify_generation(&self, files: &BTreeMap<String, Blob>) -> Result<(), String> {
+        if let Some(e) = &self.generation_error {
+            return Err(e.clone());
+        }
+        let expected = if self.generation.is_empty() { &self.descriptor.entries } else { &self.generation };
+        let mut current = BTreeMap::new();
+        for (key, blob) in files.iter().filter(|(key, _)| family(key)) {
+            if current.insert(key.to_ascii_lowercase(), blob).is_some() {
+                return Err("ambiguous current height-resource inventory".into());
             }
-            .map_err(|e| e.to_string())?;
-            if b.len() != e.len || digest(&b) != e.hash {
-                return Err(
-                    "native height family differs from its completed Save; recover/reconcile explicitly before height publication".into()
-                );
+        }
+        if current.len() != expected.len() || expected.iter().any(|e| !current.contains_key(&e.key)) {
+            return Err("native height-resource inventory is incomplete or differs from its authority".into());
+        }
+        for e in expected {
+            let bytes = current[&e.key].bytes().map_err(|e| e.to_string())?;
+            if bytes.len() != e.len || digest(&bytes) != e.hash {
+                return Err(if self.generation.is_empty() {
+                    "unpublished native height family differs from B0; reconcile explicitly before height publication"
+                } else {
+                    "native height family differs from its completed Save; recover/reconcile explicitly before height publication"
+                }
+                .into());
             }
         }
         Ok(())
+    }
+    pub fn check_generation(&self, m: &MapModel) -> Result<(), String> {
+        let mut files = m.carried.clone();
+        for (_, item) in &m.lf {
+            if files.insert(item.path.clone(), item.origin.clone()).is_some() {
+                return Err("ambiguous native LF source".into());
+            }
+        }
+        self.verify_generation(&files)
+    }
+    /// Validate the owner's publication separately from editable recovery LF.
+    pub fn check_owner_generation(&self) -> Result<(), String> {
+        let files = crate::MapFiles::from_dir(&self.native_dir()).map_err(|e| e.to_string())?;
+        self.verify_generation(&files.folder)
     }
     pub fn resolve(&self) -> Result<Baseline, String> {
         self.check_record()?;
@@ -459,8 +511,52 @@ impl Context {
             + self.descriptor.body.capacity()
             + entries(&self.descriptor.entries)
             + entries(&self.generation)
+            + self.generation_error.as_ref().map_or(0, String::capacity)
+    }
+    /// Plan a copy without creating its originals or entry. The document stages
+    /// and preflights native output before materializing this anchor.
+    pub fn plan_copy(&self, root: &Path, native: &str) -> Result<Self, String> {
+        self.check_copy_owner(root, native)?;
+        let root = std::path::absolute(root).map_err(|e| e.to_string())?;
+        let path = Self::record_path(&root, &self.map)?;
+        if path.exists() {
+            let existing = Self::open(&root, &self.map)?;
+            if existing.id() != self.id() || existing.native != native {
+                return Err("authoring destination already owns a different lineage".into());
+            }
+            return Ok(existing);
+        }
+        let mut target = self.clone();
+        target.root = root;
+        target.native = native.into();
+        target.record = Self::encode(native, &self.descriptor, &[]);
+        target.generation.clear();
+        target.generation_error = None;
+        target.anchor_exists = false;
+        Ok(target)
+    }
+    fn check_copy_owner(&self, root: &Path, native: &str) -> Result<(), String> {
+        let destination = resource_path(root, native)?;
+        for target in [root, &destination] {
+            for protected in [self.native_dir(), self.root.join("authoring")] {
+                if overlaps(target, &protected)? {
+                    return Err("authoring copy overlaps the native map or authoring store".into());
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Pin only originals after the copy's native and completion outputs have
+    /// staged. Its completion entry is published last by that same native Save.
+    pub fn materialize_copy(&self, target: &Self) -> Result<(), String> {
+        self.check_copy_owner(&target.root, &target.native)?;
+        self.check_record()?;
+        target.check_record()?;
+        let baseline = self.resolve()?;
+        target.persist_resources(&baseline, false)
     }
     pub fn copy_to(&self, root: &Path, native: &str) -> Result<Self, String> {
+        self.check_copy_owner(root, native)?;
         Self::create(root, &self.map, native, &self.resolve()?)
     }
     pub fn completion(&self, files: &crate::MapFiles) -> Result<(Output, Self), String> {
@@ -472,15 +568,26 @@ impl Context {
             }
         }
         let generation = inventory(&family_files);
+        Self::complete_family(&self.descriptor, &generation)?;
         let record = Self::encode(&self.native, &self.descriptor, &generation);
         let mut output = Output::new(Self::record_path(&self.root, &self.map)?, Source::Bytes(record.clone()));
         output.priority = u8::MAX;
         let mut next = self.clone();
         next.record = record;
         next.generation = generation;
+        next.generation_error = None;
+        next.anchor_exists = true;
         Ok((output, next))
     }
     pub fn id(&self) -> &str {
         &self.descriptor.id
     }
+}
+
+/// Practical path overlap, including existing aliases and nonexisting tails.
+pub fn overlaps(a: &Path, b: &Path) -> Result<bool, String> {
+    let a = wce_foundation::save_path::key(a)?;
+    let b = wce_foundation::save_path::key(b)?;
+    let prefix = |s: &str| format!("{}{}", s.trim_end_matches(['/', '\\']), std::path::MAIN_SEPARATOR);
+    Ok(a == b || a.starts_with(&prefix(&b)) || b.starts_with(&prefix(&a)))
 }

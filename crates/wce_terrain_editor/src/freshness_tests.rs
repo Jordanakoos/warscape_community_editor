@@ -27,7 +27,9 @@ fn enumeration_stamp_survives_changes_before_document_creation() {
     let source = root.0.join("source");
     fixture().write_to(&source).unwrap();
     let input = MapFiles::from_dir(&source).unwrap();
-    std::fs::write(source.join("normals/normal_0.dds"), b"external replacement with another size").unwrap();
+    // This test isolates enumeration-time freshness. An altered height-family
+    // resource also requires explicit authority reconciliation (R1/R2).
+    std::fs::write(source.join("opaque.bin"), b"external replacement with another size").unwrap();
     let mut d = doc(built::read("test", &input).unwrap());
     d.save_dir = Some(source.clone());
     changed(&mut d);
