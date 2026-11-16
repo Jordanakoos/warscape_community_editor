@@ -82,7 +82,7 @@ fn measure(root: &Path, multi: bool) -> Result<(), String> {
     heap::reset_peak();
     d.save(&SaveTarget::default())?;
     let save_peak = heap::peak() - idle;
-    let record = fs::metadata(built::baseline::Context::record_path(&root, map)?).map_err(|e| e.to_string())?.len();
+    let record = fs::metadata(built::baseline::Context::record_path(root, map)?).map_err(|e| e.to_string())?.len();
     let payload = size(&root.join("authoring/terrain/baselines"));
     drop(d);
     let mut reopened = open(root, &native)?;
