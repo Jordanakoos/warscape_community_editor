@@ -508,3 +508,6 @@ fn extra_native_normal_chunks_cannot_silently_disable_the_baseline_calculation()
     assert!(native(&root).join("normals/normal_1.dds").is_file());
     assert_eq!(read(&s.0), before);
 }
+
+#[path = "baseline_r1_tests.rs"]
+mod r1_corrections;
