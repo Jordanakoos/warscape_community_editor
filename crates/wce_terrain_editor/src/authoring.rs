@@ -361,7 +361,7 @@ fn read_recovery(slot: &Path) -> Result<Vec<String>, String> {
     }
     if v.len() == 9
         && (!matches!(v[7].as_str(), "verified" | "blocked" | "legacy")
-            || v[8].len() % 2 != 0
+            || !v[8].len().is_multiple_of(2)
             || !v[8].bytes().all(|b| b.is_ascii_hexdigit())
             || (v[7] == "blocked" && v[8].is_empty())
             || (v[7] != "blocked" && !v[8].is_empty())
