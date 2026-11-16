@@ -1,5 +1,7 @@
 # Terrain Editor developer handover
 
+**16 November 2026 continuity correction:** the first F-B Phase 4 candidate was rejected in independent R1. The [R1 correction report](investigations/fb_phase4_r1_corrections.md) supersedes its readiness and retained-memory claims; see that report for the local correction branch, focused R2 handoff, failure-to-pass regressions and application results. The [authoring-context contract](formats/terrain_authoring.md) includes recovery verdict preservation and complete-generation verification.
+
 Maintained entry point for Attila and Rome II, following the [Terrain roadmap](plans/terrain_editor.md). Last verified: **15 November 2026**, upstream assessed at `1786457a4f671e1336775a09cfb89910b8da4791`, with the accepted self-contained Terrain Save/Export `4c4351e2` and native v9 safeguards `c91f9100` composed locally. This branch additionally contains the [F-B native battle continuity implementation](investigations/fb_phase4_production_baseline.md). It has no dependency on unmerged #51 and leaves upstream Tile I/O unchanged. This document describes source and accepted local behavior through D3E; it does not certify every profile or game-runtime output. Update the revision, availability and focused verification when a feature lands.
 
 ## Start here

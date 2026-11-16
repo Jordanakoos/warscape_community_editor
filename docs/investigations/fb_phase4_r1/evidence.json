@@ -1,0 +1,496 @@
+{
+  "schema": "wce-fb-r1-correction-evidence-1",
+  "date": "2026-11-16",
+  "branch": "fix/native-battle-baseline-r1",
+  "rejected_candidate": "11ff9ce74a12e94a933dcc9f0f445b9ec47656f7",
+  "tested_implementation": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+  "checks": [
+    {
+      "label": "rejected-candidate-desired-tests",
+      "source_commit": "11d5ec3db355ecd950e7ede9c367056a41c33b15",
+      "exit_code": 101,
+      "elapsed_seconds": 280.939,
+      "started_utc": "2026-11-16T20:53:41.547461+00:00",
+      "log_name": "rejected-candidate-desired-tests.log",
+      "log_sha256": "d3a04b69a893006f19c022b6442984f1cea1dbe55e07df0a13f61a2fa9285635",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 8,
+        "ignored": 0
+      },
+      "desired_cases": {
+        "baseline_tests::r1_corrections::r1_known_generation_block_survives_repeated_recovery_and_overwrite": "FAILED",
+        "baseline_tests::r1_corrections::r2_interrupted_first_publication_is_blocked_until_explicit_reconciliation": "FAILED",
+        "baseline_tests::r1_corrections::r2_line_boundary_truncation_cannot_omit_a_normal_from_generation_verification": "FAILED",
+        "baseline_tests::r1_corrections::r3_missing_original_still_opens_intact_editable_draft_and_supports_repair": "FAILED",
+        "baseline_tests::r1_corrections::r4_rejected_nested_copy_is_read_only_for_source_destination_and_document": "FAILED",
+        "baseline_tests::r1_corrections::r4_source_map_overlap_is_checked_even_when_owned_map_is_elsewhere": "FAILED",
+        "baseline_tests::r1_corrections::r5_four_chunk_reopen_and_noop_save_retain_no_duplicate_inventory": "FAILED",
+        "baseline_tests::r1_corrections::r5_single_chunk_reopen_and_noop_save_retain_no_encoded_normal_snapshot": "FAILED"
+      }
+    },
+    {
+      "label": "final-desired-tests",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 7.101,
+      "started_utc": "2026-11-16T21:31:44.686852+00:00",
+      "log_name": "final-desired-tests.log",
+      "log_sha256": "624937bab26579b100628adf77af46c1088274bf2c2c3d6f81e58be5e74bed1c",
+      "test_result_totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {
+        "baseline_tests::r1_corrections::r1_known_generation_block_survives_repeated_recovery_and_overwrite": "ok",
+        "baseline_tests::r1_corrections::r2_interrupted_first_publication_is_blocked_until_explicit_reconciliation": "ok",
+        "baseline_tests::r1_corrections::r2_line_boundary_truncation_cannot_omit_a_normal_from_generation_verification": "ok",
+        "baseline_tests::r1_corrections::r3_missing_original_still_opens_intact_editable_draft_and_supports_repair": "ok",
+        "baseline_tests::r1_corrections::r4_rejected_nested_copy_is_read_only_for_source_destination_and_document": "ok",
+        "baseline_tests::r1_corrections::r4_source_map_overlap_is_checked_even_when_owned_map_is_elsewhere": "ok",
+        "baseline_tests::r1_corrections::r5_four_chunk_reopen_and_noop_save_retain_no_duplicate_inventory": "ok",
+        "baseline_tests::r1_corrections::r5_single_chunk_reopen_and_noop_save_retain_no_encoded_normal_snapshot": "ok"
+      }
+    },
+    {
+      "label": "final-regressions",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 19.652,
+      "started_utc": "2026-11-16T21:28:32.376295+00:00",
+      "log_name": "final-regressions.log",
+      "log_sha256": "abf5991825905102d28802bfaab62071bc435d9a9e0c8ebf4555582416b55db0",
+      "test_result_totals": {
+        "passed": 446,
+        "failed": 0,
+        "ignored": 8
+      },
+      "desired_cases": {
+        "baseline_tests::r1_corrections::r4_rejected_nested_copy_is_read_only_for_source_destination_and_document": "ok",
+        "baseline_tests::r1_corrections::r4_source_map_overlap_is_checked_even_when_owned_map_is_elsewhere": "ok",
+        "baseline_tests::r1_corrections::r2_interrupted_first_publication_is_blocked_until_explicit_reconciliation": "ok",
+        "baseline_tests::r1_corrections::r5_single_chunk_reopen_and_noop_save_retain_no_encoded_normal_snapshot": "ok",
+        "baseline_tests::r1_corrections::r2_line_boundary_truncation_cannot_omit_a_normal_from_generation_verification": "ok",
+        "baseline_tests::r1_corrections::r5_four_chunk_reopen_and_noop_save_retain_no_duplicate_inventory": "ok",
+        "baseline_tests::r1_corrections::r3_missing_original_still_opens_intact_editable_draft_and_supports_repair": "ok",
+        "baseline_tests::r1_corrections::r1_known_generation_block_survives_repeated_recovery_and_overwrite": "ok"
+      }
+    },
+    {
+      "label": "final-test-clippy",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 7.497,
+      "started_utc": "2026-11-16T21:28:52.090555+00:00",
+      "log_name": "final-test-clippy.log",
+      "log_sha256": "9fb21ab3018923d5109bf49d496d6671a9af54759f275fc30170ee1852b0674c",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "final-callers",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 8.419,
+      "started_utc": "2026-11-16T21:26:42.013606+00:00",
+      "log_name": "final-callers.log",
+      "log_sha256": "b011f62f9c54ec973dbe964cb412de50e5e428f99f04b0c7c191750f7ef209db",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "final-app",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 54.069,
+      "started_utc": "2026-11-16T21:26:50.491152+00:00",
+      "log_name": "final-app.log",
+      "log_sha256": "d08b678ba3beb831d306049154e747d20911ef2f9f21f993b4076eabd8a5d88a",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "cost-clippy",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 0.646,
+      "started_utc": "2026-11-16T21:26:41.310445+00:00",
+      "log_name": "cost-clippy.log",
+      "log_sha256": "cdf08daeb89c9c60f861207c7eed92823a9fe411eec2ebadfe2dafb68a1398af",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "retention-cost",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 5.792,
+      "started_utc": "2026-11-16T21:27:44.619342+00:00",
+      "log_name": "retention-cost.log",
+      "log_sha256": "39cd435ff6abaf479f682e5404247f130552f13259712218cc7fe74370cd43a9",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "app-eight-session",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 14.844,
+      "started_utc": "2026-11-16T21:28:59.648718+00:00",
+      "log_name": "app-eight-session.log",
+      "log_sha256": "5732f0072a707ce351a176a4c6972c76b3bb9bf56985ac4f0e18f93c0bca0167",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "app-r1-adversarial",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 17.693,
+      "started_utc": "2026-11-16T21:29:14.552408+00:00",
+      "log_name": "app-r1-adversarial.log",
+      "log_sha256": "b8f691d6181d2c27e146ff11355f624b8de46d07b88f385cae4573c2a5971b05",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "real-v9-witnesses",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 17.476,
+      "started_utc": "2026-11-16T21:31:27.108729+00:00",
+      "log_name": "real-v9-witnesses.log",
+      "log_sha256": "83030eb18c4079d5e4d05d85c03026b8f7824161aaa97f796e4ed629ca137ab1",
+      "test_result_totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "final-format",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 5.91,
+      "started_utc": "2026-11-16T21:31:51.847177+00:00",
+      "log_name": "final-format.log",
+      "log_sha256": "8257b1e68409aedef4d8bd7612043449f507518556f0b5b173055262cc07d318",
+      "test_result_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "desired_cases": {}
+    },
+    {
+      "label": "tested-libs-clippy",
+      "source_commit": "4cdfe730559167a417a2f546bacb5b45c06febd5",
+      "exit_code": 0,
+      "elapsed_seconds": 12.258,
+      "started_utc": "2026-11-16T21:35:55.175853+00:00",
+      "log_name": "tested-libs-clippy.log",
+      "log_sha256": "d0908c4e151e27118abebf5520db3c33144e5445b9c89915dcd41f789f0ee113"
+    }
+  ],
+  "application_eight_session": {
+    "normal_sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e",
+    "native": {
+      "lf_height_map.data": {
+        "bytes": 1402,
+        "sha256": "9a08e2fcdf54fbcd91e6c9c98fab81f70e2e777cddf5c272af5fd151f7f733c7"
+      },
+      "lf_height_map.dds": {
+        "bytes": 73880,
+        "sha256": "351efedd665a159f15b92457241735446a1b15fd82e8d4e9a775d30f8426785c"
+      },
+      "opaque.bin": {
+        "bytes": 34,
+        "sha256": "6967b565b2a015a8c5e2072ce8d35fc9be4118eebd5734ba18405a4eb5457b10"
+      },
+      "terrain.tile_list": {
+        "bytes": 85,
+        "sha256": "db19aab6f993a5f21e640f53542b14f668ee34392b4fea21b132c2f4ddc0dd03"
+      },
+      "normals/normal_0.dds": {
+        "bytes": 87520,
+        "sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e"
+      }
+    },
+    "runs": [
+      {
+        "label": "continuous",
+        "exit_code": 0,
+        "seconds": 5.04,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "reopened-A",
+        "exit_code": 0,
+        "seconds": 1.422,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "reopened-B",
+        "exit_code": 0,
+        "seconds": 1.383,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "kept-open",
+        "exit_code": 0,
+        "seconds": 1.457,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "relocated",
+        "exit_code": 0,
+        "seconds": 1.267,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "autosave-create",
+        "exit_code": 0,
+        "seconds": 1.33,
+        "errors": [],
+        "expected_save_prompts": 0
+      },
+      {
+        "label": "autosave-restore",
+        "exit_code": 0,
+        "seconds": 1.492,
+        "errors": [],
+        "expected_save_prompts": 2
+      },
+      {
+        "label": "blocked-recovery",
+        "exit_code": 0,
+        "seconds": 1.31,
+        "errors": [],
+        "expected_save_prompts": 0
+      }
+    ],
+    "costs": [
+      {
+        "project": "continuous",
+        "payload_bytes": 162700,
+        "record_bytes": 932,
+        "total_bytes": 163632
+      },
+      {
+        "project": "reopened",
+        "payload_bytes": 162700,
+        "record_bytes": 932,
+        "total_bytes": 163632
+      },
+      {
+        "project": "recovery-owner",
+        "payload_bytes": 162700,
+        "record_bytes": 932,
+        "total_bytes": 163632
+      }
+    ],
+    "foreground": false,
+    "synthetic": true,
+    "game_runtime_certification": false,
+    "exe_sha256": "194b53229ca25ba3a715c042db6b2f0f8c7f1f612c1e9511258f8e8fe5ae23a3"
+  },
+  "application_adversarial": {
+    "processes": 13,
+    "runs": [
+      {
+        "label": "generation-seed",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "generation-blocked",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "generation-restored-blocked",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "generation-repaired",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "missing-seed",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "missing-restored",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "missing-repaired",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "nested-seed",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "nested-rejected",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "first-publication-seed",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "first-publication-blocked",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "truncated-completion-seed",
+        "exit_code": 0,
+        "errors": []
+      },
+      {
+        "label": "truncated-completion-blocked",
+        "exit_code": 0,
+        "errors": []
+      }
+    ],
+    "known_block_preserved": true,
+    "missing_original_editable": true,
+    "generation_inventories_fail_closed": true,
+    "rejected_copy_read_only": true,
+    "verified_repairs_succeed": true,
+    "normal_reference_sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e",
+    "exe_sha256": "194b53229ca25ba3a715c042db6b2f0f8c7f1f612c1e9511258f8e8fe5ae23a3",
+    "foreground": false
+  },
+  "retention_measurements": [
+    {
+      "case": "single",
+      "payload_bytes": 162700,
+      "record_bytes": 932,
+      "bound_idle_allocation_delta": 2084,
+      "context_metadata_capacity_bytes": 1871,
+      "writer_peak_extra_heap_bytes": 1342744,
+      "save_peak_extra_heap_bytes": 1417862,
+      "normal_sha256": "2ffa5f8f4bf4d8ed5dace39b67058b513c65a2d039f8b00c83ca278dbb32fe1e",
+      "encoded_normal_inventory_bytes": 87520,
+      "cache_bytes_after_reopen": 0,
+      "cache_bytes_after_noop_save": 0,
+      "cache_bytes_after_second_noop_save": 0,
+      "noop_save_retained_heap_delta_bytes": 184,
+      "second_noop_save_retained_heap_delta_bytes": 0,
+      "noop_save_extra_heap_peak_bytes": 1417981
+    },
+    {
+      "case": "four-chunk",
+      "payload_bytes": 2303976,
+      "record_bytes": 1496,
+      "bound_idle_allocation_delta": 3083,
+      "context_metadata_capacity_bytes": 2861,
+      "writer_peak_extra_heap_bytes": 3880903,
+      "save_peak_extra_heap_bytes": 4406831,
+      "normal_sha256": "58ab8d445419f89f4eadcd8aaa1198b2e499672e3ce6fac2d8314b01dacd5fc4",
+      "encoded_normal_inventory_bytes": 1770560,
+      "cache_bytes_after_reopen": 0,
+      "cache_bytes_after_noop_save": 0,
+      "cache_bytes_after_second_noop_save": 0,
+      "noop_save_retained_heap_delta_bytes": 72,
+      "second_noop_save_retained_heap_delta_bytes": 0,
+      "noop_save_extra_heap_peak_bytes": 4407052
+    }
+  ],
+  "real_v9_witnesses": [
+    {
+      "label": "main_rome_map",
+      "sha256": "b9d2f31e65017fcf2fd1820907308c5c3a9593edb0f803178e0ab97b334b355e",
+      "placements": 555424,
+      "byte_exact_and_row_rules": true
+    },
+    {
+      "label": "sicilia_existing_baseline",
+      "sha256": "6b90002fd34aca00ff05b1d8d7ce26378d1122ce2fa316052ffc3f86d3400e99",
+      "placements": 562525,
+      "byte_exact_and_row_rules": true
+    }
+  ],
+  "preservation_audit": {
+    "review_relative_root": "rome2-overhaul/reviews/fb-phase4-r1-20261116",
+    "review_files_checked": 1499,
+    "review_files_unchanged": true,
+    "review_report_sha256": "901719870bbe256d565d2d5bdd3b789ce99c12bb9e099e007d8fd74d249fa668",
+    "review_manifest_sha256": "353ac77886626c9d264b8d0f53aaee4057377ed4938ef4e3d3dda0b02889f865",
+    "old_refs_checked": 62,
+    "old_refs_unchanged": true,
+    "added_refs": {
+      "refs/heads/fix/native-battle-baseline-r1": "4cdfe730559167a417a2f546bacb5b45c06febd5"
+    },
+    "frozen_tests_commit": "11d5ec3db355ecd950e7ede9c367056a41c33b15",
+    "tests_only_negative_diff": [
+      "crates/wce_terrain_editor/src/baseline_r1_tests.rs",
+      "crates/wce_terrain_editor/src/baseline_tests.rs",
+      "crates/wce_terrain_editor/tests/support/native_battle.rs"
+    ],
+    "frozen_tests_sha256": "a816e795249941446b595964a74902758ad9fab38d63457c05111653a0266052",
+    "frozen_tests_unchanged": true,
+    "protected_source_paths_unchanged": [
+      "crates/wce_terrain_io/src/built.rs",
+      "crates/wce_terrain_io/src/attila/normals.rs",
+      "crates/wce_tile_io/src/attila/bob_tile.rs",
+      "crates/wce_tile_io/src/attila/ati_dxt.rs",
+      "crates/wce_foundation",
+      "crates/wce_tile/src/battle_map/tile_list.rs",
+      "crates/wce_tile/src/battle_map/tile_list_integrity_test.rs",
+      "Cargo.lock",
+      "Cargo.toml"
+    ]
+  },
+  "normal_calculation_and_encoder_unchanged": true,
+  "normal_mips_compared": 8,
+  "lf_chmf_and_untouched_resources_equal": true,
+  "game_runtime_certification": false,
+  "publication": "local only; no PR, merge or push"
+}

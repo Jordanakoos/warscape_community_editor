@@ -1,5 +1,7 @@
 # F-B Phase 4 — production native battle continuity
 
+**Historical candidate report.** Independent Review R1 rejected candidate `11ff9ce74a12e94a933dcc9f0f445b9ec47656f7` after finding authority, inventory, recovery, copy and memory-retention defects. Its original readiness statement and initial-pin cost measurements below do not establish closure. Use the [R1 correction report](fb_phase4_r1_corrections.md) for the corrected candidate, permanent desired-behavior regressions and post-reopen/no-op-Save measurements. The rejected branch and original review evidence remain preserved.
+
 Implemented locally on **`feature/native-battle-baseline`**, tested implementation **`da264468f6449b427ee13ea97b214eb1517d91e6`** (15 November 2026). Ready for independent review of the bounded native battle workflows below. Nothing has been pushed or submitted; owner acceptance of Phase 4 is still pending. Final documentation/evidence commits do not change production code.
 
 ## Provenance and scope
